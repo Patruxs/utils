@@ -1,14 +1,58 @@
 # UTILS Developer Hub
 
-UTILS is a small terminal utility hub for scripts and workflows used during local development, infrastructure work, deployment preparation, and cleanup tasks.
+UTILS is a small terminal utility hub for scripts and workflows used during local development, network diagnostics, configuration, and cleanup tasks.
 
 The project is written in Go and builds into a single executable. After it is built, you do not need Node.js, Python, or any other scripting runtime to run the utility.
 
 ## Current Utilities
 
-- System & Credential Cleaner: dry-run-first cleanup for local developer credentials, shell history, IDE authentication/cache/data, browser caches, and optional browser profiles.
-- Infrastructure & Cloud Manager: route is prepared for safe start and stop workflows.
-- Application Deployment Helper: route is prepared for Docker image build and Docker Hub push preparation.
+| Area | Feature | What it does |
+| --- | --- | --- |
+| Cleaner | System & Credential Cleaner | Dry-run-first local cleanup for developer machines. |
+| Cleaner | Dry-run mode | Shows what would be deleted without removing files. |
+| Cleaner | Execute mode | Deletes selected matching local files. |
+| Cleaner | Developer credentials/configs | Cleans local cloud, Git, Docker, Kubernetes, package-manager, and IaC credentials/configs. |
+| Cleaner | AI tool data | Cleans Codex, Gemini, Antigravity, and Claude local data. |
+| Cleaner | IDE data | Cleans Visual Studio, VS Code, VS Code Insiders, and VSCodium auth/cache/data/history. |
+| Cleaner | Copilot data | Cleans GitHub Copilot auth, config, cache, and extension data. |
+| Cleaner | SSH cleanup | Optionally includes SSH config, known hosts, and key files. |
+| Cleaner | Shell/tool history | Cleans shell, REPL, database, debugger, and CLI history files. |
+| Cleaner | Browser cache cleanup | Cleans Chrome/Chromium, Edge, Brave, CocCoc, Firefox, and Safari caches where supported. |
+| Cleaner | Browser profile cleanup | Optionally removes browser sign-ins, cookies, sessions, passwords, extensions, storage, history, and bookmarks. |
+| Cleaner | Windows Credential Manager | Optionally deletes allowlisted developer credentials on Windows. |
+| Cleaner | Force-stop target apps | Optionally stops browsers, IDEs, and AI apps before cleanup. |
+| Cleaner | Cleanup log | Writes a structured cleanup log under the current user profile. |
+| Cleaner | User-profile safety guard | Refuses to delete paths outside the current user profile. |
+| Network | Network & Diagnostics Manager | Inspects, diagnoses, cleans caches, and configures networking. |
+| Network | View current config | Shows adapter, DNS, IP, MTU, DoH, hosts, and ping information. |
+| Network | Diagnostics | Tests connectivity, DNS resolution, and ping quality. |
+| Network | Apply network config | Applies DNS, DoH where supported, and MTU 1500. |
+| Network | Cloudflare DNS | Sets `1.1.1.1` and `1.0.0.1`. |
+| Network | Google DNS | Sets `8.8.8.8` and `8.8.4.4`. |
+| Network | OpenDNS | Sets `208.67.222.222` and `208.67.220.220`. |
+| Network | Quad9 DNS | Sets `9.9.9.9` and `149.112.112.112`. |
+| Network | Flush DNS cache | Flushes OS DNS caches. |
+| Network | Enable DoH | Enables Windows DNS over HTTPS templates where supported. |
+| Network | Disable DoH | Removes Windows DNS over HTTPS entries where supported. |
+| Network | Optimize network settings | Applies TCP/MTU optimizations. |
+| Network | Reset network optimizations | Resets TCP/Winsock or best-effort platform equivalents. |
+| Network | Reset DNS | Restores automatic/default resolver behavior. |
+| Network | Reset defaults | Resets DNS, disables DoH where supported, and clears persistent DNS settings. |
+| Network | Hosts view | Reads the hosts file. |
+| Network | Hosts add | Adds an IP/domain hosts entry. |
+| Network | Hosts remove custom | Removes custom hosts entries while preserving defaults/comments. |
+| Network | Hosts backup | Creates `hosts.backup`. |
+| Network | Hosts restore | Restores from `hosts.backup`. |
+| Network | Clear Chrome/Chromium cache | Clears Chrome and Chromium cache/code-cache paths. |
+| Network | Clear Firefox cache | Clears Firefox `cache2` folders. |
+| Network | Clear Edge cache | Clears Microsoft Edge cache/code-cache paths. |
+| Network | Clear Brave cache | Clears Brave cache/code-cache paths. |
+| Network | Clear Opera cache | Clears Opera cache/code-cache paths. |
+| Network | Clear all browser caches | Runs all supported browser cache cleaners. |
+| Network | Persistent DNS status | Shows saved persistent DNS mode and values. |
+| Network | Persistent DNS toggle | Turns persistent DNS mode on or off. |
+| Network | Persistent DNS apply | Applies saved DNS values. |
+| Network | Persistent DNS clear | Removes saved persistent DNS settings. |
 
 ## Requirements
 
@@ -106,7 +150,7 @@ Linux or macOS:
 ./bin/utils
 ```
 
-## Self-Management Commands
+## Most Use Commands
 
 | Task | Command |
 | --- | --- |
@@ -133,3 +177,5 @@ Common `GOOS` values are `windows`, `linux`, and `darwin`. Common `GOARCH` value
 ```powershell
 go test ./...
 ```
+
+
