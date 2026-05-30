@@ -28,16 +28,20 @@ jobs:
       - name: Test
         run: go test ./...
 
-      - name: Check release publishing token
+      - name: Resolve release publishing token
+        id: release_token
         env:
           GORELEASER_PAT: ${{ secrets.GORELEASER_PAT }}
         run: |
           if [ -z "$GORELEASER_PAT" ]; then
-            echo "::error::Missing GORELEASER_PAT. Create a fine-grained PAT that can write contents to Patruxs/utils, Patruxs/homebrew-tap, and Patruxs/scoop-bucket, then add it as an Actions secret named GORELEASER_PAT."
-            exit 1
+            echo "::notice::Missing GORELEASER_PAT. Skipping GoReleaser package publishing; create a fine-grained PAT that can write contents to Patruxs/utils, Patruxs/homebrew-tap, and Patruxs/scoop-bucket, then add it as an Actions secret named GORELEASER_PAT to enable this workflow."
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "has_token=true" >> "$GITHUB_OUTPUT"
 
       - name: Run GoReleaser
+        if: steps.release_token.outputs.has_token == 'true'
         uses: goreleaser/goreleaser-action@v5
         with:
           distribution: goreleaser

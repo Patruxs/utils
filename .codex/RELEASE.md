@@ -13,7 +13,7 @@ All install paths use standard user permissions only: no `sudo`, admin prompts, 
 - Create a GitHub PAT that can write to `Patruxs/utils`, `Patruxs/homebrew-tap`, and `Patruxs/scoop-bucket`.
 - Add the PAT to `Patruxs/utils` as Actions secret `GORELEASER_PAT`.
 - Keep the default `GITHUB_TOKEN`; it can publish current-repo releases, but the PAT is required for cross-repo tap and bucket pushes.
-- If `Check release publishing token` fails, `GORELEASER_PAT` is missing or empty.
+- If `Resolve release publishing token` reports a missing `GORELEASER_PAT`, the GitHub Actions workflow skips GoReleaser package publishing. Use the local `github-release-build` script to publish release assets, or add the secret to enable automated GoReleaser publishing.
 - If Homebrew/Scoop publishing fails, verify the package repos exist and the PAT can write repository contents.
 - If a tag exists but `/releases/latest` returns `404`, that tag workflow did not publish a release. Inspect it with:
 

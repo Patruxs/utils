@@ -15,3 +15,20 @@
 - **Status**: Fixed
 
 ---
+
+## [2026-05-30 20:59] - Release Workflow Failed Without GORELEASER_PAT
+
+- **Type**: Process
+- **Severity**: Medium
+- **File**: `.github/workflows/release.yml:25`
+- **Agent**: Codex
+- **Root Cause**: Creating the `v0.1.1` GitHub Release also created the tag and triggered the GoReleaser workflow, but the repository did not have the `GORELEASER_PAT` secret required by the workflow's package-publishing guard.
+- **Error Message**:
+  ```text
+  Missing GORELEASER_PAT. Create a fine-grained PAT that can write contents to Patruxs/utils, Patruxs/homebrew-tap, and Patruxs/scoop-bucket, then add it as an Actions secret named GORELEASER_PAT.
+  ```
+- **Fix Applied**: Updated the workflow to emit a notice and skip GoReleaser package publishing when `GORELEASER_PAT` is missing; the local `github-release-build` script remains the release asset publishing path.
+- **Prevention**: Add `GORELEASER_PAT` before relying on tag-triggered GoReleaser publishing, or continue publishing assets through `.codex/skills/github-release-build/scripts/build-release-assets.ps1`.
+- **Status**: Fixed
+
+---
