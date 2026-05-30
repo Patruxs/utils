@@ -1,0 +1,4 @@
+interface:
+  display_name: "GitHub Release Build"
+  short_description: "Build complete UTILS release assets."
+  default_prompt: "Use $github-release-build to build, verify, and publish a complete UTILS GitHub Release."

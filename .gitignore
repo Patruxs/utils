@@ -1,0 +1,40 @@
+# Build outputs
+/bin/
+/dist/
+/build/
+/utils
+/tui
+/utils_bin/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go workspace and coverage files
+/vendor/
+/.gocache/
+coverage.*
+*.coverprofile
+*.prof
+
+# Logs and runtime output
+*.log
+*.tmp
+*.bak
+*.go.[0-9]*
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
