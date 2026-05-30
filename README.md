@@ -16,11 +16,28 @@ To install and run a published UTILS binary, you do not need Go, GitHub CLI, Nod
 
 To run from source or build the executable, install Go matching the version in `go.mod`.
 
-## Install On Windows
+## Installation
 
-This installs UTILS into your user profile and adds it to your user PATH. You can run these commands from any PowerShell directory, including `C:\WINDOWS\System32`.
+### Linux & macOS
 
-Open PowerShell and run:
+Install with the shell installer:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Patruxs/utils/main/install.sh | bash
+```
+
+The installer supports the same environment variables as `install.sh`: `UTILS_REPO`, `UTILS_BIN`, and `UTILS_INSTALL_DIR`.
+
+Alternatively, install with Homebrew:
+
+```sh
+brew tap Patruxs/tap
+brew install utils
+```
+
+### Windows
+
+Install with the PowerShell installer:
 
 ```powershell
 $installer = Join-Path $env:TEMP 'utils-install.ps1'
@@ -40,26 +57,18 @@ If you do not use `-AddToPath`, run it from the default install directory:
 & "$env:USERPROFILE\utils_bin\utils.exe"
 ```
 
-If you see `Access to the path 'C:\WINDOWS\System32\install.ps1' is denied`, you are using an old command that saves the installer into the current directory. Use the `$env:TEMP` command above instead.
-
-If the installer says `No published GitHub Release found`, UTILS has not published a downloadable Windows binary yet. The Windows installer does not require Go or GitHub CLI, but it does require a published GitHub Release asset such as `utils_v0.1.0_windows_amd64.zip`.
-
-## Install On Linux Or macOS
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/Patruxs/utils/main/install.sh | bash
-```
-
-The installer supports the same environment variables as `install.sh`: `UTILS_REPO`, `UTILS_BIN`, and `UTILS_INSTALL_DIR`.
-
-Scoop, after the first release is published:
+Windows users can also install with Scoop after the first release is published:
 
 ```powershell
 scoop bucket add utils https://github.com/Patruxs/scoop-bucket.git
 scoop install utils
 ```
 
-More release and package-manager details are in [RELEASE.md](RELEASE.md).
+If you see `Access to the path 'C:\WINDOWS\System32\install.ps1' is denied`, you are using an old command that saves the installer into the current directory. Use the `$env:TEMP` command above instead.
+
+If the installer says `No published GitHub Release found`, UTILS has not published a downloadable Windows binary yet. The Windows installer does not require Go or GitHub CLI, but it does require a published GitHub Release asset such as `utils_v0.1.0_windows_amd64.zip`.
+
+More release and package-manager details are in [.codex/RELEASE.md](.codex/RELEASE.md).
 
 ## Development
 

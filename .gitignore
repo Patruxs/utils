@@ -24,6 +24,8 @@ coverage.*
 *.tmp
 *.bak
 *.go.[0-9]*
+ERRORS.md
+.agent/logs/
 
 # Local configuration and secrets
 .env

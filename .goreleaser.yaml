@@ -48,6 +48,7 @@ brews:
       - utils
     repository:
       owner: Patruxs
+      # brew tap Patruxs/tap maps to the GitHub repository Patruxs/homebrew-tap.
       name: homebrew-tap
       branch: main
       token: "{{ .Env.GITHUB_TOKEN }}"

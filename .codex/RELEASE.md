@@ -1,20 +1,20 @@
 # Release And Installation
 
-UTILS releases use GitHub Actions and GoReleaser to build Linux, macOS, and Windows binaries for `amd64` and `arm64`, publish GitHub Release assets, and update Homebrew and Scoop package repositories.
+UTILS releases use GitHub Actions and GoReleaser to build Linux, macOS, and Windows binaries for `amd64` and `arm64`, publish GitHub Release assets, and update the Homebrew tap and Scoop bucket repositories.
 
 All install paths use standard user permissions only: no `sudo`, admin prompts, or system-wide install directories. One-line installers require a published GitHub Release; if `/releases/latest` returns `404 Not Found`, no public latest release exists yet or the repo is private to unauthenticated users.
 
 ## GitHub Setup
 
 - Create `Patruxs/utils`.
-- Create `Patruxs/homebrew-tap`.
+- Create the Homebrew tap backing repository `Patruxs/homebrew-tap`; users install from it with `brew tap Patruxs/tap`.
 - Create `Patruxs/scoop-bucket`.
 - In `Patruxs/utils`, enable GitHub Actions with write access to repository contents.
-- Create a GitHub PAT that can write to `Patruxs/utils`, `Patruxs/homebrew-tap`, and `Patruxs/scoop-bucket`.
+- Create a GitHub PAT that can write to `Patruxs/utils`, the `Patruxs/tap` backing repository `Patruxs/homebrew-tap`, and `Patruxs/scoop-bucket`.
 - Add the PAT to `Patruxs/utils` as Actions secret `GORELEASER_PAT`.
 - Keep the default `GITHUB_TOKEN`; it can publish current-repo releases, but the PAT is required for cross-repo tap and bucket pushes.
 - If `Resolve release publishing token` reports a missing `GORELEASER_PAT`, the GitHub Actions workflow skips GoReleaser package publishing. Use the local `github-release-build` script to publish release assets, or add the secret to enable automated GoReleaser publishing.
-- If Homebrew/Scoop publishing fails, verify the package repos exist and the PAT can write repository contents.
+- If Homebrew tap or Scoop bucket publishing fails, verify the package repositories exist and the PAT can write repository contents.
 - If a tag exists but `/releases/latest` returns `404`, that tag workflow did not publish a release. Inspect it with:
 
 ```powershell
@@ -29,7 +29,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-## Homebrew
+## Homebrew Tap
 
 After the first successful release:
 
@@ -38,16 +38,16 @@ brew tap Patruxs/tap
 brew install utils
 ```
 
-## Scoop
+## Scoop Bucket
 
-After the first successful release:
+After the first successful release, Windows users can install with Scoop:
 
 ```powershell
 scoop bucket add utils https://github.com/Patruxs/scoop-bucket.git
 scoop install utils
 ```
 
-## Linux/macOS One-Liner
+## Linux & macOS One-Liner
 
 Installs the latest release into `~/.local/bin`:
 
