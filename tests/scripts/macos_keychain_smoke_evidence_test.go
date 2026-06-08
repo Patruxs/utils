@@ -64,6 +64,7 @@ func TestMacOSKeychainSmokeScriptUsesHostedMacOSCompatibleKeychainSetup(t *testi
 		`security default-keychain -d user | sed 's/^ *"//; s/"$//' >"$old_default_keychain_file"`,
 		`security default-keychain -d user -s "$keychain_path"`,
 		`security default-keychain -d user -s "$old_default_keychain"`,
+		`export UTILS_KEYCHAIN_PATH="$keychain_path"`,
 		`while IFS= read -r old_keychain; do`,
 		`old_keychains+=("$old_keychain")`,
 	} {
