@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -42,7 +43,8 @@ func (darwinKeyStore) LoadOrCreateKey() ([]byte, error) {
 }
 
 func (darwinKeyStore) DeleteKey() error {
-	err := runSecurityCommand("delete-generic-password", "-s", keychainService, "-a", keychainAccount)
+	args := append([]string{"delete-generic-password", "-s", keychainService, "-a", keychainAccount}, smokeKeychainPathArg()...)
+	err := runSecurityCommand(args...)
 	if errors.Is(err, errKeychainItemNotFound) {
 		return nil
 	}
@@ -52,7 +54,8 @@ func (darwinKeyStore) DeleteKey() error {
 var errKeychainItemNotFound = errors.New("keychain item not found")
 
 func readKeychainKey() ([]byte, error) {
-	out, err := securityCommandOutput("find-generic-password", "-s", keychainService, "-a", keychainAccount, "-w")
+	args := append([]string{"find-generic-password", "-s", keychainService, "-a", keychainAccount, "-w"}, smokeKeychainPathArg()...)
+	out, err := securityCommandOutput(args...)
 	if err != nil {
 		return nil, err
 	}
@@ -70,10 +73,11 @@ func writeKeychainKey(key []byte) error {
 	}
 	encoded := base64.StdEncoding.EncodeToString(key)
 	command := fmt.Sprintf(
-		"add-generic-password -U -s %s -a %s -w %s\n",
+		"add-generic-password -U -s %s -a %s -w %s%s\n",
 		securityToken(keychainService),
 		securityToken(keychainAccount),
 		securityToken(encoded),
+		securityInteractiveKeychainArg(),
 	)
 	return runSecurityInteractive(command)
 }
@@ -124,6 +128,20 @@ func runSecurityInteractive(input string) error {
 
 func securityToken(value string) string {
 	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
+}
+
+func smokeKeychainPathArg() []string {
+	if path := os.Getenv("UTILS_KEYCHAIN_PATH"); path != "" {
+		return []string{path}
+	}
+	return nil
+}
+
+func securityInteractiveKeychainArg() string {
+	if path := os.Getenv("UTILS_KEYCHAIN_PATH"); path != "" {
+		return " " + securityToken(path)
+	}
+	return ""
 }
 
 func isKeychainItemNotFound(output string) bool {
