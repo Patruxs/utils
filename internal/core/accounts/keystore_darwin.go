@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -72,14 +71,8 @@ func writeKeychainKey(key []byte) error {
 		return fmt.Errorf("invalid key length")
 	}
 	encoded := base64.StdEncoding.EncodeToString(key)
-	command := fmt.Sprintf(
-		"add-generic-password -U -s %s -a %s -w %s%s\n",
-		securityToken(keychainService),
-		securityToken(keychainAccount),
-		securityToken(encoded),
-		securityInteractiveKeychainArg(),
-	)
-	return runSecurityInteractive(command)
+	args := append([]string{"add-generic-password", "-U", "-s", keychainService, "-a", keychainAccount, "-w", encoded}, smokeKeychainPathArg()...)
+	return runSecurityCommand(args...)
 }
 
 func runSecurityCommand(args ...string) error {
@@ -98,50 +91,11 @@ func securityCommandOutput(args ...string) ([]byte, error) {
 	return nil, fmt.Errorf("macOS Keychain operation failed")
 }
 
-func runSecurityInteractive(input string) error {
-	cmd := exec.Command("/usr/bin/security")
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("macOS Keychain operation failed")
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		defer stdin.Close()
-		_, err := io.WriteString(stdin, input)
-		errCh <- err
-	}()
-
-	out, runErr := cmd.CombinedOutput()
-	writeErr := <-errCh
-	if writeErr != nil {
-		return fmt.Errorf("macOS Keychain operation failed")
-	}
-	if runErr == nil {
-		return nil
-	}
-	if isKeychainItemNotFound(string(out)) {
-		return errKeychainItemNotFound
-	}
-	return fmt.Errorf("macOS Keychain operation failed")
-}
-
-func securityToken(value string) string {
-	return `"` + strings.ReplaceAll(value, `"`, `\"`) + `"`
-}
-
 func smokeKeychainPathArg() []string {
 	if path := os.Getenv("UTILS_KEYCHAIN_PATH"); path != "" {
 		return []string{path}
 	}
 	return nil
-}
-
-func securityInteractiveKeychainArg() string {
-	if path := os.Getenv("UTILS_KEYCHAIN_PATH"); path != "" {
-		return " " + securityToken(path)
-	}
-	return ""
 }
 
 func isKeychainItemNotFound(output string) bool {
