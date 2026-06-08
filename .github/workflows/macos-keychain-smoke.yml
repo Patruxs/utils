@@ -1,0 +1,35 @@
+name: macOS Keychain Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keychain-smoke:
+    name: Keychain runtime smoke
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache: true
+
+      - name: Run macOS Keychain smoke
+        env:
+          UTILS_KEYCHAIN_SMOKE_EVIDENCE_PATH: ./macos-keychain-smoke.json
+        run: bash scripts/smoke-macos-keychain.sh
+
+      - name: Upload sanitized Keychain smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-keychain-smoke
+          path: macos-keychain-smoke.json
+          if-no-files-found: ignore
