@@ -66,6 +66,7 @@ security list-keychains -d user -s "$keychain_path"
 security default-keychain -d user -s "$keychain_path"
 
 export UTILS_KEYCHAIN_SMOKE=1
+export UTILS_KEYCHAIN_PATH="$keychain_path"
 export HOME="$tmp_dir/home"
 mkdir -p "$HOME"
 
