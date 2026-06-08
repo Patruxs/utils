@@ -64,6 +64,9 @@ security set-keychain-settings -lut 21600 "$keychain_path"
 security unlock-keychain -p "$keychain_password" "$keychain_path"
 security list-keychains -d user -s "$keychain_path"
 security default-keychain -d user -s "$keychain_path"
+security add-generic-password -U -s "UTILS smoke probe" -a "probe" -w "probe" "$keychain_path"
+security find-generic-password -s "UTILS smoke probe" -a "probe" -w "$keychain_path" >/dev/null
+security delete-generic-password -s "UTILS smoke probe" -a "probe" "$keychain_path" >/dev/null
 
 export UTILS_KEYCHAIN_SMOKE=1
 export UTILS_KEYCHAIN_PATH="$keychain_path"
