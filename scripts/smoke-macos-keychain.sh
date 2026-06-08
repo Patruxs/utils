@@ -34,10 +34,20 @@ tmp_dir="$(mktemp -d)"
 keychain_path="$tmp_dir/utils-smoke.keychain-db"
 keychain_password="utils-smoke-$(date +%s)-$$"
 old_keychains_file="$tmp_dir/keychains.txt"
+old_default_keychain_file="$tmp_dir/default-keychain.txt"
 
 restore_keychains() {
+  if [[ -f "$old_default_keychain_file" ]]; then
+    old_default_keychain="$(cat "$old_default_keychain_file")"
+    if [[ -n "$old_default_keychain" ]]; then
+      security default-keychain -d user -s "$old_default_keychain" >/dev/null
+    fi
+  fi
   if [[ -f "$old_keychains_file" ]]; then
-    mapfile -t old_keychains <"$old_keychains_file"
+    old_keychains=()
+    while IFS= read -r old_keychain; do
+      old_keychains+=("$old_keychain")
+    done <"$old_keychains_file"
     if [[ "${#old_keychains[@]}" -gt 0 ]]; then
       security list-keychains -d user -s "${old_keychains[@]}" >/dev/null
     fi
@@ -48,10 +58,12 @@ restore_keychains() {
 trap restore_keychains EXIT
 
 security list-keychains -d user | sed 's/^ *"//; s/"$//' >"$old_keychains_file"
+security default-keychain -d user | sed 's/^ *"//; s/"$//' >"$old_default_keychain_file"
 security create-keychain -p "$keychain_password" "$keychain_path"
 security set-keychain-settings -lut 21600 "$keychain_path"
 security unlock-keychain -p "$keychain_password" "$keychain_path"
 security list-keychains -d user -s "$keychain_path"
+security default-keychain -d user -s "$keychain_path"
 
 export UTILS_KEYCHAIN_SMOKE=1
 export HOME="$tmp_dir/home"
