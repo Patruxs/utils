@@ -65,6 +65,9 @@ func TestMacOSKeychainSmokeScriptUsesHostedMacOSCompatibleKeychainSetup(t *testi
 		`security default-keychain -d user -s "$keychain_path"`,
 		`security default-keychain -d user -s "$old_default_keychain"`,
 		`export UTILS_KEYCHAIN_PATH="$keychain_path"`,
+		`security add-generic-password -U -s "UTILS smoke probe" -a "probe" -w "probe" "$keychain_path"`,
+		`security find-generic-password -s "UTILS smoke probe" -a "probe" -w "$keychain_path" >/dev/null`,
+		`security delete-generic-password -s "UTILS smoke probe" -a "probe" "$keychain_path" >/dev/null`,
 		`while IFS= read -r old_keychain; do`,
 		`old_keychains+=("$old_keychain")`,
 	} {
