@@ -11,7 +11,6 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -92,7 +91,7 @@ func (k networkFooterKeys) FullHelp() [][]key.Binding {
 type NetworkModel struct {
 	spinner          spinner.Model
 	keyMap           networkKeyMap
-	logViewer        NetworkLogViewerModel
+	logViewer        common.LogViewer
 	manager          corenetwork.NetworkManager
 	results          []networkActionResult
 	err              error
@@ -113,12 +112,6 @@ type NetworkModel struct {
 	confirmRun       bool
 	running          []networkActionID
 	runStarted       time.Time
-}
-
-type NetworkLogViewerModel struct {
-	viewport     viewport.Model
-	report       *corenetwork.Report
-	mouseFocused bool
 }
 
 type networkFinishedMsg struct {
@@ -291,7 +284,7 @@ func NewNetworkModelWithManager(manager corenetwork.NetworkManager) NetworkModel
 			spinner.WithStyle(common.Accent),
 		),
 		keyMap:          newNetworkKeyMap(),
-		logViewer:       NewNetworkLogViewerModel(),
+		logViewer:       common.NewLogViewer(),
 		manager:         manager,
 		checkedActions:  make(map[networkActionID]bool),
 		hostDomainInput: domainInput,
@@ -299,18 +292,6 @@ func NewNetworkModelWithManager(manager corenetwork.NetworkManager) NetworkModel
 	}
 	model.layoutComponents()
 	return model
-}
-
-func NewNetworkLogViewerModel() NetworkLogViewerModel {
-	logViewport := viewport.New(0, defaultNetworkLogViewportHeight)
-	logViewport.KeyMap = viewport.KeyMap{
-		Down:     key.NewBinding(key.WithKeys("down", "j")),
-		Up:       key.NewBinding(key.WithKeys("up", "k")),
-		PageDown: key.NewBinding(key.WithKeys("pgdown", "d", "ctrl+d")),
-		PageUp:   key.NewBinding(key.WithKeys("pgup", "u", "ctrl+u")),
-	}
-
-	return NetworkLogViewerModel{viewport: logViewport}
 }
 
 func (m NetworkModel) Init() tea.Cmd {
@@ -341,7 +322,7 @@ func (m NetworkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.canceled = msg.canceled
 		m.notice = ""
 		m.logViewer.SetMouseFocused(false)
-		m.logViewer.SetReport(combinedNetworkReport(msg.results))
+		m.logViewer.SetSections(networkLogSections(msg.results))
 		m.layoutComponents()
 		return m, nil
 	case tea.KeyMsg:
@@ -424,7 +405,7 @@ func (m NetworkModel) View() string {
 	case networkStateConfirmingWrite:
 		body = m.confirmView(width)
 	case networkStateFinished:
-		body = m.resultView(width, height)
+		body = m.resultView(width)
 	default:
 		body = m.actionsView(width, height)
 	}
@@ -440,8 +421,10 @@ func (m *NetworkModel) layoutComponents() {
 	inputWidth := common.MaxInt(10, width-len("│ ▸ domain  ")-4)
 	m.hostDomainInput.Width = inputWidth
 	m.hostIPInput.Width = inputWidth
-	_, logHeight := m.resultLayout(width, height)
-	m.logViewer.SetSize(common.MaxInt(1, width-4), logHeight)
+	top := lipgloss.Height(m.resultSummary(width))
+	logHeight := common.MaxInt(1, height-top-2)
+	m.logViewer.SetSize(common.Panel{Width: width}.InnerWidth(), logHeight)
+	m.logViewer.SetSize(common.Panel{Width: width}.InnerWidth(), common.MaxInt(1, common.MinInt(logHeight, m.logViewer.TotalLines())))
 }
 
 func (m NetworkModel) actionsView(width, height int) string {
@@ -592,11 +575,7 @@ func (m NetworkModel) resultSummary(width int) string {
 		summary = common.Error.Render(common.ToneDanger.Glyph() + " Completed with errors: " + operation)
 	}
 
-	warnings, errorCount := 0, 0
-	for _, result := range m.results {
-		warnings += result.report.Warnings
-		errorCount += result.report.Errors
-	}
+	warnings, errorCount := networkProblemCounts(m.results)
 	counts := common.RenderCounts(width, []common.Count{
 		{Label: "warnings", N: warnings, Tone: common.ToneWarning},
 		{Label: "errors", N: errorCount, Tone: common.ToneDanger},
@@ -614,25 +593,19 @@ func (m NetworkModel) resultOperation() string {
 	return fmt.Sprintf("%d actions", len(m.results))
 }
 
-func (m NetworkModel) resultLayout(width, height int) (int, int) {
-	top := lipgloss.Height(m.resultSummary(width))
-	return top, common.MaxInt(1, height-top-2)
-}
-
-func (m NetworkModel) resultView(width, height int) string {
-	top, logHeight := m.resultLayout(width, height)
-	_ = top
-	panel := common.Panel{Title: "Activity", Width: width, Height: logHeight + 2}
-	if m.logViewer.mouseFocused {
-		panel.Variant = common.PanelFocused
+func (m NetworkModel) resultView(width int) string {
+	panel := common.Panel{Title: "Activity", Meta: m.logViewer.Position(), Width: width}
+	log := m.logViewer.View()
+	if log == "" {
+		log = lipgloss.NewStyle().Italic(true).Inherit(common.Muted).Render("No activity")
 	}
-	return m.resultSummary(width) + "\n" + panel.Render(m.logViewer.viewport.View())
+	return m.resultSummary(width) + "\n" + panel.Render(log)
 }
 
 func (m NetworkModel) mouseInLogViewer(msg tea.MouseMsg) bool {
-	width, height := m.bodySize()
-	top, logHeight := m.resultLayout(width, height)
-	return msg.Y > top && msg.Y <= top+logHeight
+	width, _ := m.bodySize()
+	top := lipgloss.Height(m.resultSummary(width))
+	return msg.Y > top && msg.Y <= top+m.logViewer.Height()
 }
 
 func (m *NetworkModel) moveActions(delta int) {
@@ -975,56 +948,6 @@ func (m NetworkModel) selectedOrCurrentActionIDs() []networkActionID {
 	return []networkActionID{m.currentAction().id}
 }
 
-func (m *NetworkLogViewerModel) SetSize(width, height int) {
-	if width == m.viewport.Width && height == m.viewport.Height {
-		return
-	}
-	m.viewport.Width = width
-	m.viewport.Height = height
-	m.refreshContent()
-}
-
-func (m *NetworkLogViewerModel) SetReport(report corenetwork.Report) {
-	m.report = &report
-	m.refreshContent()
-	m.viewport.GotoTop()
-}
-
-func (m *NetworkLogViewerModel) SetMouseFocused(focused bool) {
-	m.mouseFocused = focused
-}
-
-func (m *NetworkLogViewerModel) refreshContent() {
-	if m.report == nil {
-		return
-	}
-	m.viewport.SetContent(renderNetworkActivity(*m.report, m.viewport.Width))
-}
-
-func (m NetworkLogViewerModel) Update(msg tea.Msg) (NetworkLogViewerModel, tea.Cmd) {
-	if m.report == nil {
-		return m, nil
-	}
-
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(msg)
-	return m, cmd
-}
-
-func (m NetworkLogViewerModel) IsKeyScrollInput(msg tea.KeyMsg) bool {
-	if m.report == nil {
-		return false
-	}
-	return key.Matches(msg, m.viewport.KeyMap.Up, m.viewport.KeyMap.PageUp, m.viewport.KeyMap.Down, m.viewport.KeyMap.PageDown)
-}
-
-func (m NetworkLogViewerModel) IsFocusedMouseScrollInput(msg tea.MouseMsg) bool {
-	if m.report == nil || !m.mouseFocused || msg.Action != tea.MouseActionPress {
-		return false
-	}
-	return msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown
-}
-
 func runNetwork(ctx context.Context, manager corenetwork.NetworkManager, options networkRunOptions) tea.Cmd {
 	return func() tea.Msg {
 		results, err := runNetworkActions(ctx, manager, options)
@@ -1056,17 +979,6 @@ func runNetworkActions(ctx context.Context, manager corenetwork.NetworkManager, 
 		}
 	}
 	return results, errors.Join(runErrors...)
-}
-
-func combinedNetworkReport(results []networkActionResult) corenetwork.Report {
-	var combined corenetwork.Report
-	for index, result := range results {
-		if len(results) > 1 {
-			combined.Entries = append(combined.Entries, corenetwork.Entry{Level: corenetwork.LevelInfo, Message: fmt.Sprintf("%d/%d %s", index+1, len(results), actionTitle(result.action))})
-		}
-		combined.Entries = append(combined.Entries, result.report.Entries...)
-	}
-	return combined
 }
 
 func runNetworkAction(ctx context.Context, manager corenetwork.NetworkManager, action networkActionID, options networkRunOptions) (corenetwork.Report, error) {
@@ -1157,17 +1069,77 @@ func actionTitle(id networkActionID) string {
 	return "Network action"
 }
 
-func renderNetworkActivity(report corenetwork.Report, width int) string {
-	if len(report.Entries) == 0 {
-		return common.Muted.Render("No activity")
+func networkLogSections(results []networkActionResult) []common.LogSection {
+	var problems []common.LogLine
+	sections := make([]common.LogSection, 0, len(results)+1)
+	for index, result := range results {
+		section := common.LogSection{
+			ID:    fmt.Sprintf("action-%d", index),
+			Title: actionTitle(result.action),
+			Tone:  common.ToneAccent,
+		}
+		if len(results) > 1 {
+			section.Title = fmt.Sprintf("%d/%d %s", index+1, len(results), section.Title)
+		}
+		for _, line := range networkResultLines(result) {
+			section.Lines = append(section.Lines, line)
+			if line.Tone == common.ToneWarning || line.Tone == common.ToneDanger {
+				if len(results) > 1 {
+					line.Detail = actionTitle(result.action)
+				}
+				problems = append(problems, line)
+			}
+		}
+		sections = append(sections, section)
+	}
+	if len(problems) == 0 {
+		return sections
 	}
 
-	var b strings.Builder
-	for _, entry := range report.Entries {
-		for _, line := range common.WrapLine(fmt.Sprintf("[%s] ", entry.Level), entry.Message, width) {
-			b.WriteString(line)
-			b.WriteString("\n")
+	problemTone := common.ToneWarning
+	for _, line := range problems {
+		if line.Tone == common.ToneDanger {
+			problemTone = common.ToneDanger
 		}
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return append([]common.LogSection{{ID: "problems", Title: "PROBLEMS", Tone: problemTone, Lines: problems}}, sections...)
+}
+
+func networkResultLines(result networkActionResult) []common.LogLine {
+	lines := make([]common.LogLine, 0, len(result.report.Entries)+1)
+	for _, entry := range result.report.Entries {
+		lines = append(lines, common.LogLine{Tone: networkLevelTone(entry.Level), Text: entry.Message})
+	}
+	if result.err != nil && result.report.Errors == 0 && !errors.Is(result.err, context.Canceled) {
+		lines = append(lines, common.LogLine{Tone: common.ToneDanger, Text: fmt.Sprintf("%s failed: %v", actionTitle(result.action), result.err)})
+	}
+	return lines
+}
+
+func networkProblemCounts(results []networkActionResult) (int, int) {
+	warnings, errorCount := 0, 0
+	for _, result := range results {
+		for _, line := range networkResultLines(result) {
+			switch line.Tone {
+			case common.ToneWarning:
+				warnings++
+			case common.ToneDanger:
+				errorCount++
+			}
+		}
+	}
+	return warnings, errorCount
+}
+
+func networkLevelTone(level corenetwork.Level) common.Tone {
+	switch level {
+	case corenetwork.LevelWarn:
+		return common.ToneWarning
+	case corenetwork.LevelError:
+		return common.ToneDanger
+	case corenetwork.LevelSuccess:
+		return common.ToneSuccess
+	default:
+		return common.ToneNormal
+	}
 }
