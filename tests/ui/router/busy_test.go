@@ -290,3 +290,21 @@ func networkFeature(commands corenetwork.CommandRunner) ui.AppFeature {
 		return views.NewNetworkModelWithManager(corenetwork.NewNetworkManager(commands))
 	}}
 }
+
+func TestRouterEscAtNetworkWriteConfirmationReturnsToActions(t *testing.T) {
+	d := newDriver(t)
+
+	d.send(tea.KeyMsg{Type: tea.KeyDown})
+	d.send(tea.KeyMsg{Type: tea.KeyEnter})
+	d.selectNetworkAction("Flushes OS DNS caches")
+	for _, cancel := range []tea.KeyMsg{{Type: tea.KeyEsc}, key("n")} {
+		d.send(tea.KeyMsg{Type: tea.KeyEnter})
+		if view := d.view(); !strings.Contains(view, "These actions change your system") {
+			t.Fatalf("expected the write confirmation:\n%s", view)
+		}
+		d.send(cancel)
+		if view := d.view(); !strings.Contains(view, "Canceled; nothing was changed.") || strings.Contains(view, "These actions change your system") {
+			t.Fatalf("expected %q at the write confirmation to return to the actions with nothing changed:\n%s", cancel, view)
+		}
+	}
+}

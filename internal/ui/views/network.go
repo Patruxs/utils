@@ -118,8 +118,15 @@ type networkFinishedMsg struct {
 
 type networkActionItem struct {
 	id      networkActionID
+	group   string
 	title   string
 	details []string
+}
+
+type networkActionResult struct {
+	action networkActionID
+	report corenetwork.Report
+	err    error
 }
 
 type networkRunOptions struct {
@@ -142,36 +149,44 @@ const (
 	networkLogMaxHeight             = 20
 )
 
+const (
+	networkGroupInspect    = "INSPECT"
+	networkGroupDNS        = "DNS & CONFIG"
+	networkGroupHosts      = "HOSTS"
+	networkGroupBrowser    = "BROWSER CACHES"
+	networkGroupPersistent = "PERSISTENT DNS"
+)
+
 var networkActions = []networkActionItem{
-	{networkActionViewConfig, "View Current Network Config", []string{"Reads adapter, DNS, IP, MTU, DoH, hosts, and ping information without requesting elevation."}},
-	{networkActionDiagnostics, "Run Network Diagnostics", []string{"Checks connectivity, DNS resolution, and ping quality for google.com, cloudflare.com, and github.com."}},
-	{networkActionApplyConfig, "Apply Network Config (DNS, DoH, MTU)", []string{"Applies Cloudflare DNS, Windows DoH templates where supported, and MTU 1500."}},
-	{networkActionSetCloudflareDNS, "Set Cloudflare DNS (1.1.1.1)", []string{"Fast and secure preset from tool.ps1: 1.1.1.1 and 1.0.0.1."}},
-	{networkActionSetGoogleDNS, "Set Google DNS (8.8.8.8)", []string{"Reliable preset from tool.ps1: 8.8.8.8 and 8.8.4.4."}},
-	{networkActionSetOpenDNS, "Set OpenDNS (208.67.222.222)", []string{"Family-safe preset from tool.ps1: 208.67.222.222 and 208.67.220.220."}},
-	{networkActionSetQuad9DNS, "Set Quad9 DNS (9.9.9.9)", []string{"Malware-protection preset from tool.ps1: 9.9.9.9 and 149.112.112.112."}},
-	{networkActionFlushDNS, "Flush DNS Cache", []string{"Flushes OS DNS caches using platform-specific commands."}},
-	{networkActionEnableDoH, "Enable DNS over HTTPS (DoH)", []string{"Registers Windows DoH templates for Cloudflare, Google, and Quad9; warns on platforms without a generic OS DoH CLI."}},
-	{networkActionDisableDoH, "Disable DNS over HTTPS (DoH)", []string{"Removes Windows DoH server entries; warns on platforms without generic OS DoH state."}},
-	{networkActionOptimize, "Optimize Network Settings", []string{"Applies Windows TCP optimizations from tool.ps1 and best-effort MTU/TCP equivalents on macOS/Linux."}},
-	{networkActionResetOptimizations, "Reset Network Optimizations", []string{"Runs Windows TCP/Winsock reset or best-effort platform reset commands."}},
-	{networkActionResetDNS, "Reset DNS to Automatic", []string{"Resets DNS to DHCP/automatic/default resolver behavior and flushes caches where supported."}},
-	{networkActionResetDefaults, "Reset Network Settings to Defaults", []string{"Resets DNS, disables DoH where supported, and clears persistent DNS settings."}},
-	{networkActionHostsView, "Hosts: View File", []string{"Reads the hosts file without elevation."}},
-	{networkActionHostsBackup, "Hosts: Backup File", []string{"Copies hosts to a timestamped hosts.backup-<time> file."}},
-	{networkActionHostsAdd, "Hosts: Add Entry", []string{"Prompts for domain and IP, then appends IP<TAB>domain<TAB>" + corenetwork.HostsManagedMarker + " with per-command elevation."}},
-	{networkActionHostsRemoveCustom, "Hosts: Remove Managed Entries", []string{"Removes only lines tagged " + corenetwork.HostsManagedMarker + " and lists the unmanaged lines it left alone."}},
-	{networkActionHostsRestore, "Hosts: Restore Newest Backup", []string{"Saves the current hosts as hosts.before-restore-<time>, then restores the newest hosts.backup-<time>."}},
-	{networkActionBrowserChrome, "Clear Chrome/Chromium Cache", []string{"Clears common Chrome and Chromium cache/code-cache paths for the current user."}},
-	{networkActionBrowserFirefox, "Clear Firefox Cache", []string{"Clears Firefox profile cache2 folders for the current user."}},
-	{networkActionBrowserEdge, "Clear Edge Cache", []string{"Clears common Microsoft Edge cache/code-cache paths for the current user."}},
-	{networkActionBrowserBrave, "Clear Brave Cache", []string{"Clears common Brave cache/code-cache paths for the current user."}},
-	{networkActionBrowserOpera, "Clear Opera Cache", []string{"Clears common Opera cache/code-cache paths for the current user."}},
-	{networkActionBrowserAll, "Clear All Browser Caches", []string{"Runs all browser cache cleaners from the original script scope."}},
-	{networkActionPersistentStatus, "Persistent DNS: View Status", []string{"Shows saved persistent DNS mode and preset values."}},
-	{networkActionTogglePersistent, "Persistent DNS: Toggle Mode", []string{"Turns persistent DNS mode on or off for future DNS preset actions."}},
-	{networkActionApplyPersistent, "Persistent DNS: Apply Saved Settings", []string{"Loads saved DNS preset values and applies them with per-command elevation."}},
-	{networkActionClearPersistent, "Persistent DNS: Clear Settings", []string{"Removes saved persistent DNS settings."}},
+	{networkActionViewConfig, networkGroupInspect, "View Current Network Config", []string{"Reads adapter, DNS, IP, MTU, DoH, hosts, and ping information without requesting elevation."}},
+	{networkActionDiagnostics, networkGroupInspect, "Run Network Diagnostics", []string{"Checks connectivity, DNS resolution, and ping quality for google.com, cloudflare.com, and github.com."}},
+	{networkActionApplyConfig, networkGroupDNS, "Apply Network Config (DNS, DoH, MTU)", []string{"Applies Cloudflare DNS, Windows DoH templates where supported, and MTU 1500."}},
+	{networkActionSetCloudflareDNS, networkGroupDNS, "Set Cloudflare DNS (1.1.1.1)", []string{"Fast and secure preset from tool.ps1: 1.1.1.1 and 1.0.0.1."}},
+	{networkActionSetGoogleDNS, networkGroupDNS, "Set Google DNS (8.8.8.8)", []string{"Reliable preset from tool.ps1: 8.8.8.8 and 8.8.4.4."}},
+	{networkActionSetOpenDNS, networkGroupDNS, "Set OpenDNS (208.67.222.222)", []string{"Family-safe preset from tool.ps1: 208.67.222.222 and 208.67.220.220."}},
+	{networkActionSetQuad9DNS, networkGroupDNS, "Set Quad9 DNS (9.9.9.9)", []string{"Malware-protection preset from tool.ps1: 9.9.9.9 and 149.112.112.112."}},
+	{networkActionFlushDNS, networkGroupDNS, "Flush DNS Cache", []string{"Flushes OS DNS caches using platform-specific commands."}},
+	{networkActionEnableDoH, networkGroupDNS, "Enable DNS over HTTPS (DoH)", []string{"Registers Windows DoH templates for Cloudflare, Google, and Quad9; warns on platforms without a generic OS DoH CLI."}},
+	{networkActionDisableDoH, networkGroupDNS, "Disable DNS over HTTPS (DoH)", []string{"Removes Windows DoH server entries; warns on platforms without generic OS DoH state."}},
+	{networkActionOptimize, networkGroupDNS, "Optimize Network Settings", []string{"Applies Windows TCP optimizations from tool.ps1 and best-effort MTU/TCP equivalents on macOS/Linux."}},
+	{networkActionResetOptimizations, networkGroupDNS, "Reset Network Optimizations", []string{"Runs Windows TCP/Winsock reset or best-effort platform reset commands."}},
+	{networkActionResetDNS, networkGroupDNS, "Reset DNS to Automatic", []string{"Resets DNS to DHCP/automatic/default resolver behavior and flushes caches where supported."}},
+	{networkActionResetDefaults, networkGroupDNS, "Reset Network Settings to Defaults", []string{"Resets DNS, disables DoH where supported, and clears persistent DNS settings."}},
+	{networkActionHostsView, networkGroupHosts, "Hosts: View File", []string{"Reads the hosts file without elevation."}},
+	{networkActionHostsBackup, networkGroupHosts, "Hosts: Backup File", []string{"Copies hosts to a timestamped hosts.backup-<time> file."}},
+	{networkActionHostsAdd, networkGroupHosts, "Hosts: Add Entry", []string{"Prompts for domain and IP, then appends IP<TAB>domain<TAB>" + corenetwork.HostsManagedMarker + " with per-command elevation."}},
+	{networkActionHostsRemoveCustom, networkGroupHosts, "Hosts: Remove Managed Entries", []string{"Removes only lines tagged " + corenetwork.HostsManagedMarker + " and lists the unmanaged lines it left alone."}},
+	{networkActionHostsRestore, networkGroupHosts, "Hosts: Restore Newest Backup", []string{"Saves the current hosts as hosts.before-restore-<time>, then restores the newest hosts.backup-<time>."}},
+	{networkActionBrowserChrome, networkGroupBrowser, "Clear Chrome/Chromium Cache", []string{"Clears common Chrome and Chromium cache/code-cache paths for the current user."}},
+	{networkActionBrowserFirefox, networkGroupBrowser, "Clear Firefox Cache", []string{"Clears Firefox profile cache2 folders for the current user."}},
+	{networkActionBrowserEdge, networkGroupBrowser, "Clear Edge Cache", []string{"Clears common Microsoft Edge cache/code-cache paths for the current user."}},
+	{networkActionBrowserBrave, networkGroupBrowser, "Clear Brave Cache", []string{"Clears common Brave cache/code-cache paths for the current user."}},
+	{networkActionBrowserOpera, networkGroupBrowser, "Clear Opera Cache", []string{"Clears common Opera cache/code-cache paths for the current user."}},
+	{networkActionBrowserAll, networkGroupBrowser, "Clear All Browser Caches", []string{"Runs all browser cache cleaners from the original script scope."}},
+	{networkActionPersistentStatus, networkGroupPersistent, "Persistent DNS: View Status", []string{"Shows saved persistent DNS mode and preset values."}},
+	{networkActionTogglePersistent, networkGroupPersistent, "Persistent DNS: Toggle Mode", []string{"Turns persistent DNS mode on or off for future DNS preset actions."}},
+	{networkActionApplyPersistent, networkGroupPersistent, "Persistent DNS: Apply Saved Settings", []string{"Loads saved DNS preset values and applies them with per-command elevation."}},
+	{networkActionClearPersistent, networkGroupPersistent, "Persistent DNS: Clear Settings", []string{"Removes saved persistent DNS settings."}},
 }
 
 func newNetworkKeyMap() networkKeyMap {
@@ -606,7 +621,7 @@ func (m NetworkModel) updateWriteConfirmation(msg tea.KeyMsg) (tea.Model, tea.Cm
 	switch {
 	case key.Matches(msg, common.DefaultKeys.Yes):
 		return m.startRun(m.pendingRun)
-	case key.Matches(msg, common.DefaultKeys.No):
+	case key.Matches(msg, common.DefaultKeys.No, common.DefaultKeys.CancelRun):
 		return m.cancelWriteConfirmation()
 	case key.Matches(msg, common.DefaultKeys.Up, common.DefaultKeys.Down):
 		m.confirmRun = !m.confirmRun
@@ -804,7 +819,7 @@ func (m NetworkModel) Running() bool {
 }
 
 func (m NetworkModel) OwnsKeys() bool {
-	return m.Running() || m.state == networkStateEditingHostsAdd
+	return m.Running() || m.state == networkStateEditingHostsAdd || m.state == networkStateConfirmingWrite
 }
 
 func (m NetworkModel) renderActions() string {
