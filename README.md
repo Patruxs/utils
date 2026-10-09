@@ -38,10 +38,10 @@ The project is written in Go and builds into a single executable. After it is bu
 | Network | Reset DNS | Restores automatic/default resolver behavior. |
 | Network | Reset defaults | Resets DNS, disables DoH where supported, and clears persistent DNS settings. |
 | Network | Hosts view | Reads the hosts file. |
-| Network | Hosts add | Adds an IP/domain hosts entry. |
-| Network | Hosts remove custom | Removes custom hosts entries while preserving defaults/comments. |
-| Network | Hosts backup | Creates `hosts.backup`. |
-| Network | Hosts restore | Restores from `hosts.backup`. |
+| Network | Hosts backup | Creates a timestamped `hosts.backup-<time>`. |
+| Network | Hosts add | Adds an IP/domain hosts entry tagged `# utils-managed`. |
+| Network | Hosts remove managed | Removes only entries tagged `# utils-managed`; other lines stay. |
+| Network | Hosts restore | Saves the current file as `hosts.before-restore-<time>`, then restores the newest `hosts.backup-<time>`. |
 | Network | Clear Chrome/Chromium cache | Clears Chrome and Chromium cache/code-cache paths. |
 | Network | Clear Firefox cache | Clears Firefox `cache2` folders. |
 | Network | Clear Edge cache | Clears Microsoft Edge cache/code-cache paths. |

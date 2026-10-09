@@ -7,17 +7,12 @@ import (
 
 type CommandRunner interface {
 	Output(ctx context.Context, name string, args ...string) ([]byte, error)
-	Run(ctx context.Context, name string, args ...string) error
 }
 
 type execCommandRunner struct{}
 
 func (execCommandRunner) Output(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, args...).CombinedOutput()
-}
-
-func (execCommandRunner) Run(ctx context.Context, name string, args ...string) error {
-	return exec.CommandContext(ctx, name, args...).Run()
 }
 
 type commandSpec struct {
