@@ -289,7 +289,7 @@ func (m Router) footer(width int) string {
 	}
 	room := common.FooterRoom(width, status)
 	if m.notice.text != "" {
-		return common.Footer(width, common.Notice(room, m.notice.tone, m.notice.text), status)
+		return common.Footer(width, common.NoticeLine(room, m.notice.tone, m.notice.text), status)
 	}
 	return common.Footer(width, common.Hints(m.fitHints(room)), status)
 }
