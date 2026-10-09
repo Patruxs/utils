@@ -238,7 +238,7 @@ func newCleanerOptionsList() common.CheckboxListModel {
 			ID:    optionSSHKeys,
 			Label: "Include SSH keys",
 			Details: []string{
-				"Adds .ssh/config, known_hosts, and id_* private/public key files.",
+				"Adds .ssh/config, known_hosts, id_* key files, and any other file directly in .ssh that starts with a PRIVATE KEY header.",
 				"Execute deletes local SSH keys; dry-run only lists those file deletions.",
 			},
 			FilterText: "ssh keys credentials private public",

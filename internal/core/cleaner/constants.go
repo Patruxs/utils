@@ -12,6 +12,8 @@ const (
 
 	flatpakFirefoxID = "org.mozilla.firefox"
 
+	privateKeyHeaderReadLimit = 64
+
 	userPrivateDirPerm  os.FileMode = 0o700
 	userPrivateFilePerm os.FileMode = 0o600
 

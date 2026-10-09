@@ -121,6 +121,47 @@ func TestRunExecuteRefusesTargetBehindLinkThatLeavesHome(t *testing.T) {
 	}
 }
 
+func TestRunSSHCleanupFindsPrivateKeysByHeaderOnly(t *testing.T) {
+	home := fakeHome(t)
+	sshDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	privateKey := "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk=\n-----END OPENSSH PRIVATE KEY-----\n"
+	outsideKey := filepath.Join(t.TempDir(), "outside.key")
+	for path, body := range map[string]string{
+		filepath.Join(sshDir, "server.key"):      privateKey,
+		filepath.Join(sshDir, "rsa_legacy.pem"):  "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n",
+		filepath.Join(sshDir, "server.key.pub"):  privateKey,
+		filepath.Join(sshDir, "notes.txt"):       "PRIVATE KEY is mentioned here, not as a header\n",
+		filepath.Join(sshDir, "authorized_keys"): "ssh-ed25519 AAAAC3Nza user@host\n",
+		outsideKey:                               privateKey,
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outsideKey, filepath.Join(sshDir, "linked.key")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	report, err := cleaner.Run(context.Background(), cleaner.Options{CleanSSHKeys: true})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	for _, name := range []string{"server.key", "rsa_legacy.pem"} {
+		if !hasEntry(report, cleaner.LevelDryRun, filepath.Join(sshDir, name)) {
+			t.Fatalf("expected private key %s to be listed, got %#v", name, report.Entries)
+		}
+	}
+	for _, name := range []string{"server.key.pub", "notes.txt", "authorized_keys", "linked.key"} {
+		if hasEntry(report, cleaner.LevelDryRun, filepath.Join(sshDir, name)) {
+			t.Fatalf("expected %s to be left alone, got %#v", name, report.Entries)
+		}
+	}
+}
+
 func TestRunExecuteRemovesSymlinkAndReportsTargetKept(t *testing.T) {
 	realHome := fakeHome(t)
 	linkedHome := filepath.Join(t.TempDir(), "home")

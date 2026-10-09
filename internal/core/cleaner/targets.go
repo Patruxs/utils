@@ -1,6 +1,8 @@
 package cleaner
 
 import (
+	"io"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -340,11 +342,56 @@ func sshTargets(home string, fs FileSystem) []targetPath {
 		}
 	}
 
+	targets = append(targets, otherSSHPrivateKeys(home, fs)...)
+
 	if len(targets) == 2 {
 		targets = append(targets, targetPath{filepath.Join(home, ".ssh", "id_*"), targetLabelSSHKey})
 	}
 
 	return targets
+}
+
+func otherSSHPrivateKeys(home string, fs FileSystem) []targetPath {
+	entries, err := fs.ReadDir(filepath.Join(home, ".ssh"))
+	if err != nil {
+		return nil
+	}
+
+	root, err := fs.OpenRoot(home)
+	if err != nil {
+		return nil
+	}
+	defer root.Close()
+
+	var targets []targetPath
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.Type().IsRegular() || strings.HasPrefix(name, "id_") || strings.HasSuffix(name, ".pub") {
+			continue
+		}
+		if startsWithPrivateKeyHeader(root, filepath.Join(".ssh", name)) {
+			targets = append(targets, targetPath{filepath.Join(home, ".ssh", name), targetLabelSSHKey})
+		}
+	}
+	return targets
+}
+
+func startsWithPrivateKeyHeader(root *os.Root, rel string) bool {
+	file, err := root.Open(rel)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+
+	head := make([]byte, privateKeyHeaderReadLimit)
+	n, _ := io.ReadFull(file, head)
+	firstLine, _, _ := strings.Cut(string(head[:n]), "\n")
+	firstLine = strings.TrimSpace(firstLine)
+	return strings.HasPrefix(firstLine, "-----BEGIN ") && strings.HasSuffix(firstLine, "PRIVATE KEY-----")
 }
 
 func historyTargets(home string, fs FileSystem) []targetPath {
