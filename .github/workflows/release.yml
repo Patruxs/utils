@@ -6,21 +6,36 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   release:
     name: GoReleaser
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Require release publishing token
+        env:
+          GORELEASER_PAT: ${{ secrets.GORELEASER_PAT }}
+        run: |
+          if [ -z "$GORELEASER_PAT" ]; then
+            echo "::error::Missing GORELEASER_PAT. Create a fine-grained PAT that can write contents to Patruxs/utils, the Patruxs/tap Homebrew backing repository Patruxs/homebrew-tap, and Patruxs/scoop-bucket, then add it as an Actions secret named GORELEASER_PAT."
+            exit 1
+          fi
+
+      - name: Checkout (actions/checkout v7.0.1)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - name: Set up Go (actions/setup-go v7.0.0)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: "1.26.x"
           cache: true
@@ -28,24 +43,11 @@ jobs:
       - name: Test
         run: go test ./...
 
-      - name: Resolve release publishing token
-        id: release_token
-        env:
-          GORELEASER_PAT: ${{ secrets.GORELEASER_PAT }}
-        run: |
-          if [ -z "$GORELEASER_PAT" ]; then
-            echo "::notice::Missing GORELEASER_PAT. Skipping GoReleaser package publishing; create a fine-grained PAT that can write contents to Patruxs/utils, the Patruxs/tap Homebrew backing repository Patruxs/homebrew-tap, and Patruxs/scoop-bucket, then add it as an Actions secret named GORELEASER_PAT to enable this workflow."
-            echo "has_token=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "has_token=true" >> "$GITHUB_OUTPUT"
-
-      - name: Run GoReleaser
-        if: steps.release_token.outputs.has_token == 'true'
-        uses: goreleaser/goreleaser-action@v5
+      - name: Run GoReleaser (goreleaser/goreleaser-action v7.2.3)
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: "v2.18.3"
           args: release --clean
         env:
           # GoReleaser reads the token from the GITHUB_TOKEN environment variable.
@@ -53,3 +55,8 @@ jobs:
           # pushes package files to the Patruxs/tap Homebrew backing repository
           # Patruxs/homebrew-tap and to Patruxs/scoop-bucket.
           GITHUB_TOKEN: ${{ secrets.GORELEASER_PAT }}
+
+      - name: Attest build provenance (actions/attest v4.2.2)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-checksums: dist/checksums.txt
