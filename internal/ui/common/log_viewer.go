@@ -172,15 +172,20 @@ func (m *LogViewer) refresh() {
 		}
 		textColumn := logTextColumn(section, width)
 		layout := logSectionRows{header: len(rows)}
-		rows = append(rows, renderLogHeader(section, width))
+		if section.Title != "" {
+			rows = append(rows, renderLogHeader(section, width))
+		}
 		for _, line := range section.Lines {
 			rows = append(rows, renderLogLine(line, width, textColumn)...)
 		}
 		layout.foldStart = len(rows)
-		if section.Expanded {
+		switch {
+		case section.Expanded:
 			for _, line := range section.Folded {
 				rows = append(rows, renderLogLine(line, width, textColumn)...)
 			}
+		case section.Title == "" && len(section.Folded) > 0 && section.FoldedSummary != "":
+			rows = append(rows, Muted.Render(Truncate(logLineIndent+section.FoldedSummary, width)))
 		}
 		layout.foldLen = len(rows) - layout.foldStart
 		m.sectionRows[i] = layout

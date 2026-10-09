@@ -308,7 +308,6 @@ func newNetworkActionList() common.CheckboxListModel {
 		items = append(items, item)
 	}
 	list := common.NewCheckboxList(items, 0, 0)
-	list.SetHideDetails(true)
 	list.SetFocused(true)
 	return list
 }
