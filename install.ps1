@@ -29,6 +29,10 @@ function Invoke-Download {
     [string]$OutFile
   )
 
+  if (([Uri]$Uri).Scheme -ne "https") {
+    throw "Refusing to download over a non-HTTPS URL: $Uri"
+  }
+
   $params = @{
     Uri = $Uri
     OutFile = $OutFile
@@ -39,6 +43,21 @@ function Invoke-Download {
   }
 
   Invoke-WebRequest @params
+}
+
+function Get-ExpectedSha256 {
+  param(
+    [string]$ChecksumsPath,
+    [string]$AssetName
+  )
+
+  foreach ($line in Get-Content -LiteralPath $ChecksumsPath) {
+    $fields = @($line.Trim() -split "\s+")
+    if ($fields.Count -eq 2 -and $fields[1].TrimStart("*") -eq $AssetName) {
+      return $fields[0].ToLowerInvariant()
+    }
+  }
+  return $null
 }
 
 function Add-InstallDirToUserPath {
@@ -68,6 +87,7 @@ $tmpDir = Join-Path ([IO.Path]::GetTempPath()) ("utils-install-" + [Guid]::NewGu
 try {
   New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
   $archive = Join-Path $tmpDir "${BinName}.zip"
+  $checksums = Join-Path $tmpDir "checksums.txt"
   $extractDir = Join-Path $tmpDir "extract"
 
   Write-Step "Fetching latest UTILS release metadata..."
@@ -85,8 +105,27 @@ try {
     throw "Could not find a Windows $arch zip asset in the latest $Repo release."
   }
 
+  $checksumsAsset = $release.assets |
+    Where-Object { $_.name -eq "checksums.txt" } |
+    Select-Object -First 1
+
+  if (-not $checksumsAsset) {
+    throw "The latest $Repo release has no checksums.txt; refusing to install an unverified binary."
+  }
+
   Write-Step "Downloading $($asset.browser_download_url)..."
+  Invoke-Download -Uri $checksumsAsset.browser_download_url -OutFile $checksums
   Invoke-Download -Uri $asset.browser_download_url -OutFile $archive
+
+  $expectedSha256 = Get-ExpectedSha256 -ChecksumsPath $checksums -AssetName $asset.name
+  if (-not $expectedSha256) {
+    throw "checksums.txt has no entry for $($asset.name); refusing to install an unverified binary."
+  }
+  $actualSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actualSha256 -ne $expectedSha256) {
+    throw "Checksum mismatch for $($asset.name); refusing to install."
+  }
+  Write-Step "Verified sha256 of $($asset.name)."
 
   Write-Step "Installing $BinName to $InstallDir..."
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
