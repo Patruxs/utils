@@ -43,6 +43,9 @@ const (
 	networkSectionGlyph   = "◆"
 	networkModalWidth     = 68
 	networkModalChrome    = 6
+
+	networkChoiceSeparator = " · "
+	networkChoiceReserve   = 8
 )
 
 var networkUUID = regexp.MustCompile(`[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}`)
@@ -58,8 +61,9 @@ type networkLayout struct {
 }
 
 type networkRow struct {
-	group string
-	items []networkActionID
+	group   string
+	items   []networkActionID
+	choices bool
 }
 
 func (m NetworkModel) bodySize() (int, int) {
@@ -119,7 +123,7 @@ func (m NetworkModel) paneHeights() (int, int) {
 	if l.detailHidden {
 		return area, 0
 	}
-	listNeed := len(networkRows(false)) + 2
+	listNeed := len(networkRows(false, l.actionsWidth-4)) + 2
 	detailNeed := len(m.detailLines(l.detailWidth-4)) + 2
 	if listNeed+detailNeed <= area {
 		return area - detailNeed, detailNeed
@@ -134,22 +138,31 @@ func (m NetworkModel) listRowCapacity() int {
 }
 
 func (m NetworkModel) expanded() bool {
-	return len(networkRows(true)) <= m.listRowCapacity()
+	return len(networkRows(true, m.listInnerWidth())) <= m.listRowCapacity()
 }
 
-func networkRows(expanded bool) []networkRow {
+func (m NetworkModel) listInnerWidth() int {
+	return m.layout().actionsWidth - 4
+}
+
+func networkRows(expanded bool, width int) []networkRow {
 	var rows []networkRow
 	group := ""
+	choiceRoom := width - networkChoiceReserve
 	for _, item := range networkActions {
 		if item.group != group {
 			group = item.group
 			rows = append(rows, networkRow{group: group})
 			if !expanded && isInlineGroup(group) {
-				rows = append(rows, networkRow{group: group})
+				rows = append(rows, networkRow{group: group, choices: true})
 			}
 		}
 		if !expanded && isInlineGroup(group) {
 			last := &rows[len(rows)-1]
+			if len(last.items) > 0 && choicesWidth(append(last.items, item.id)) > choiceRoom {
+				rows = append(rows, networkRow{group: group, choices: true})
+				last = &rows[len(rows)-1]
+			}
 			last.items = append(last.items, item.id)
 			continue
 		}
@@ -158,12 +171,23 @@ func networkRows(expanded bool) []networkRow {
 	return rows
 }
 
+func choicesWidth(items []networkActionID) int {
+	width := 0
+	for index, id := range items {
+		if index > 0 {
+			width += lipgloss.Width(networkChoiceSeparator)
+		}
+		width += lipgloss.Width(networkItem(id).name)
+	}
+	return width
+}
+
 func (r networkRow) header() bool {
 	return len(r.items) == 0
 }
 
 func (r networkRow) inline() bool {
-	return len(r.items) > 1
+	return r.choices
 }
 
 func (r networkRow) selectable() bool {
@@ -176,7 +200,7 @@ func (r networkRow) selectable() bool {
 }
 
 func (m NetworkModel) rows() []networkRow {
-	return networkRows(m.expanded())
+	return networkRows(m.expanded(), m.listInnerWidth())
 }
 
 func (m NetworkModel) focusRow(rows []networkRow) int {
@@ -209,7 +233,7 @@ func (m *NetworkModel) moveFocus(delta int) {
 
 func (m NetworkModel) rowChoice(row networkRow) networkActionID {
 	if row.inline() {
-		if slot := inlineSlot(row.group); slot >= 0 && networkItem(m.choices[slot]).supported() {
+		if slot := inlineSlot(row.group); slot >= 0 && actionIDsContain(row.items, m.choices[slot]) && networkItem(m.choices[slot]).supported() {
 			return m.choices[slot]
 		}
 	}
@@ -234,8 +258,14 @@ func (m *NetworkModel) chooseInline(left bool) {
 	if !row.inline() {
 		return
 	}
+	var choices []networkActionID
+	for _, other := range rows {
+		if other.inline() && other.group == row.group {
+			choices = append(choices, other.items...)
+		}
+	}
 	position := 0
-	for index, id := range row.items {
+	for index, id := range choices {
 		if id == m.focus {
 			position = index
 		}
@@ -244,9 +274,10 @@ func (m *NetworkModel) chooseInline(left bool) {
 	if left {
 		step = -1
 	}
-	for index := position + step; index >= 0 && index < len(row.items); index += step {
-		if networkItem(row.items[index]).supported() {
-			m.setFocus(row.items[index])
+	for index := position + step; index >= 0 && index < len(choices); index += step {
+		if networkItem(choices[index]).supported() {
+			m.setFocus(choices[index])
+			m.keepFocusVisible()
 			return
 		}
 	}
@@ -348,10 +379,11 @@ func (m NetworkModel) statusCard(width int) string {
 	}
 
 	s := m.status
-	left := common.PadRight(orUnknown(s.Adapter), networkStatusLabel) + " " + orUnknown(s.Address) + common.Muted.Render(" · ") + "gw " + orUnknown(s.Gateway) + common.Muted.Render(" · ") + "MTU " + orUnknownInt(s.MTU)
+	labelWidth := common.MaxInt(networkStatusLabel, lipgloss.Width(orUnknown(s.Adapter)))
+	left := common.PadRight(orUnknown(s.Adapter), labelWidth) + " " + orUnknown(s.Address) + common.Muted.Render(" · ") + "gw " + orUnknown(s.Gateway) + common.Muted.Render(" · ") + "MTU " + orUnknownInt(s.MTU)
 	first := common.SpreadLine(inner, left, m.fittedDNS(inner-lipgloss.Width(left)-2))
 
-	doh := common.PadRight("DoH", networkStatusLabel) + " " + dohText(s.DoH)
+	doh := common.PadRight("DoH", labelWidth) + " " + dohText(s.DoH)
 	persistent := "Persistent DNS " + persistentText(s)
 	second := common.SpreadLine(inner, common.PadRight(doh, inner*2/5)+persistent, "sudo  "+sudoText(s.Sudo))
 	return panel.Render(first + "\n" + second)
@@ -542,7 +574,7 @@ func (m NetworkModel) focusRowIs(row networkRow) bool {
 }
 
 func (m NetworkModel) renderChoices(row networkRow, width int, focused bool) string {
-	separator := common.Muted.Render(" · ")
+	separator := common.Muted.Render(networkChoiceSeparator)
 	tokens := make([]string, len(row.items))
 	selected := 0
 	for index, id := range row.items {
