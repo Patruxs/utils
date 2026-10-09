@@ -111,15 +111,22 @@ func (c Confirm) View(maxWidth, maxHeight int) string {
 			body = append(body, modalPadding+wrapped)
 		}
 	}
-	if room := maxHeight - modalChromeRows; room >= 1 && len(body) > room {
+	spacer := []string{""}
+	room := maxHeight - modalChromeRows
+	if len(body) > room {
+		spacer = nil
+		room += 2
+	}
+	if room >= 1 && len(body) > room {
 		hidden := len(body) - room + 1
 		body = append(body[:room-1], modalPadding+Muted.Render(fmt.Sprintf("… %d more", hidden)))
 	}
 
 	buttons := c.buttons()
 	buttonIndent := MaxInt(0, (panel.InnerWidth()-lipgloss.Width(buttons))/2)
-	rows := append([]string{""}, body...)
-	rows = append(rows, "", strings.Repeat(" ", buttonIndent)+buttons)
+	rows := append(append([]string{}, spacer...), body...)
+	rows = append(rows, spacer...)
+	rows = append(rows, strings.Repeat(" ", buttonIndent)+buttons)
 	return panel.Render(strings.Join(rows, "\n"))
 }
 
