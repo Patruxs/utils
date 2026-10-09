@@ -171,7 +171,7 @@ func (m Router) versionBadge() string {
 
 	rightSide := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("#161A22")). // High-contrast dark charcoal
+		Foreground(lipgloss.Color("#161A22")).           // High-contrast dark charcoal
 		Background(lipgloss.Color(common.ColorPrimary)). // Theme's primary blue (#5F87FF)
 		Padding(0, 1).
 		Render(m.version)
