@@ -12,7 +12,7 @@ import (
 
 const (
 	modalMinWidth   = 44
-	modalMaxWidth   = 80
+	modalMaxWidth   = 68
 	modalPadding    = "  "
 	modalButtonGap  = "      "
 	modalChromeRows = 6

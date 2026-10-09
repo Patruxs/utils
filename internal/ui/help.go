@@ -175,7 +175,11 @@ func (m Router) helpView(maxWidth, maxHeight int) string {
 		rows[i] = helpIndent + row
 		natural = common.MaxInt(natural, lipgloss.Width(rows[i]))
 	}
-	panel := common.Panel{Variant: common.PanelFocused, Width: common.MinInt(maxWidth, natural+helpPaddingRight+4)}
+	panel := common.Panel{
+		Variant: common.PanelFocused,
+		Width:   common.MinInt(maxWidth, natural+helpPaddingRight+4),
+		Height:  common.MinInt(maxHeight, len(rows)+2),
+	}
 	return panel.Render(strings.Join(rows, "\n"))
 }
 
