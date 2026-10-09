@@ -643,7 +643,7 @@ func tagLine(item networkActionItem) string {
 	if !item.action.Elevated() {
 		return dot + " writes · current user"
 	}
-	if runtime.GOOS == osWindows {
+	if runtime.GOOS == networkOSWindows {
 		return dot + " writes · elevated via UAC"
 	}
 	return dot + " writes · elevated via sudo"
@@ -769,7 +769,7 @@ func (m NetworkModel) elevationLine(elevated bool) string {
 	switch {
 	case !elevated:
 		return "Runs as the current user."
-	case runtime.GOOS == osWindows:
+	case runtime.GOOS == networkOSWindows:
 		return "Opens a Windows UAC prompt."
 	}
 	switch m.status.Sudo {

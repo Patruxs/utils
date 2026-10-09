@@ -149,7 +149,7 @@ func TestNetworkBatchModeAppearsOnFirstSpace(t *testing.T) {
 }
 
 func TestNetworkRowsForOtherSystemsCannotBeSelected(t *testing.T) {
-	if runtime.GOOS == osWindows {
+	if runtime.GOOS == networkOSWindows {
 		t.Skip("DoH rows apply on Windows")
 	}
 	model := sizedNetworkModel(120, 37)

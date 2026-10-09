@@ -257,7 +257,7 @@ func (m NetworkModel) FooterStatus() string {
 	case networkStateFinished:
 		_, errorCount := networkProblemCounts(m.results)
 		if errorCount > 0 {
-			return common.Error.Render(fmt.Sprintf("%d %s", errorCount, plural(errorCount, "error", "errors")))
+			return common.Error.Render(plural(errorCount, "error", "errors"))
 		}
 		return ""
 	case networkStateSelectingOptions:
@@ -683,16 +683,4 @@ func actionIDsContain(actions []networkActionID, target networkActionID) bool {
 		}
 	}
 	return false
-}
-
-func formatTenths(elapsed time.Duration) string {
-	tenths := int(elapsed.Round(100*time.Millisecond) / (100 * time.Millisecond))
-	return fmt.Sprintf("%d:%02d.%d", tenths/600, tenths/10%60, tenths%10)
-}
-
-func plural(count int, singular, many string) string {
-	if count == 1 {
-		return singular
-	}
-	return many
 }

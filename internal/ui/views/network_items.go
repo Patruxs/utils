@@ -41,7 +41,10 @@ const (
 	networkActionClearPersistent
 )
 
-const networkNoUndo networkActionID = -1
+const (
+	networkNoUndo    networkActionID = -1
+	networkOSWindows                 = "windows"
+)
 
 const (
 	networkGroupInspect    = "INSPECT"
@@ -134,12 +137,12 @@ func (m NetworkModel) actionSummary(id networkActionID) string {
 		}
 		return summary
 	case networkActionOptimize:
-		if runtime.GOOS == osWindows {
+		if runtime.GOOS == networkOSWindows {
 			return "Tunes TCP auto-tuning, RSS, timestamps and ECN, and sets MTU 1500 on every active adapter."
 		}
 		return "Tunes TCP buffer, timestamp and ECN settings and sets MTU 1500 on every active interface."
 	case networkActionResetOptimizations:
-		if runtime.GOOS == osWindows {
+		if runtime.GOOS == networkOSWindows {
 			return "Resets the TCP and Winsock settings. Restart afterwards."
 		}
 		return "Restores the TCP buffer, timestamp and ECN defaults and sets MTU 1500 on every active interface."
