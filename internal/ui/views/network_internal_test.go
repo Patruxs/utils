@@ -1,6 +1,8 @@
 package views
 
 import (
+	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -10,8 +12,8 @@ import (
 
 func TestNetworkBatchRunsHostsBackupBeforeRemove(t *testing.T) {
 	model := NewNetworkModel()
-	model.checkedActions[networkActionHostsRemoveCustom] = true
-	model.checkedActions[networkActionHostsBackup] = true
+	model.actions, _ = model.actions.SetChecked(networkActionKey(networkActionHostsRemoveCustom), true)
+	model.actions, _ = model.actions.SetChecked(networkActionKey(networkActionHostsBackup), true)
 
 	actions := model.selectedActionIDs()
 
@@ -43,6 +45,13 @@ func TestNetworkWriteActionAsksForConfirmationBeforeRunning(t *testing.T) {
 	if model.state != networkStateSelectingOptions || cmd != nil {
 		t.Fatalf("expected n to cancel without running, state=%v cmd=%v", model.state, cmd != nil)
 	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd = next.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(NetworkModel)
+	if model.state != networkStateSelectingOptions || cmd != nil {
+		t.Fatalf("expected enter on the default choice to cancel without running, state=%v cmd=%v", model.state, cmd != nil)
+	}
 }
 
 func TestNetworkEnterAfterRunDoesNotRepeatAction(t *testing.T) {
@@ -58,12 +67,38 @@ func TestNetworkEnterAfterRunDoesNotRepeatAction(t *testing.T) {
 	}
 }
 
-func networkModelAt(target networkActionID) NetworkModel {
-	model := NewNetworkModel()
-	for index, action := range networkActions {
-		if action.id == target {
-			model.action = index
+func TestNetworkBatchResultListsProblemsFirstThenEachActionInOrder(t *testing.T) {
+	sections := networkLogSections([]networkActionResult{
+		{action: networkActionHostsBackup, report: corenetwork.Report{Entries: []corenetwork.Entry{{Level: corenetwork.LevelSuccess, Message: "backed up"}}}},
+		{action: networkActionFlushDNS, report: corenetwork.Report{Warnings: 1, Entries: []corenetwork.Entry{{Level: corenetwork.LevelWarn, Message: "no resolver"}}}},
+		{action: networkActionHostsRemoveCustom, err: errors.New("permission denied")},
+	})
+
+	if len(sections) != 4 || sections[0].ID != "problems" || len(sections[0].Lines) != 2 {
+		t.Fatalf("expected a problems section with the warning and the error, then one section per action, got %+v", sections)
+	}
+	for index, action := range []networkActionID{networkActionHostsBackup, networkActionFlushDNS, networkActionHostsRemoveCustom} {
+		if !strings.Contains(sections[index+1].Title, actionTitle(action)) {
+			t.Fatalf("expected section %d to be %q, got %q", index+1, actionTitle(action), sections[index+1].Title)
 		}
 	}
+}
+
+func TestNetworkHostsFormKeepsAnInvalidEntryInTheForm(t *testing.T) {
+	model := networkModelAt(networkActionHostsAdd)
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ = next.Update(tea.KeyMsg{Type: tea.KeyTab})
+	next, _ = next.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	next, cmd := next.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(NetworkModel)
+
+	if model.state != networkStateEditingHostsAdd || model.hostsError == "" || cmd != nil {
+		t.Fatalf("expected an invalid IP to keep the form open with its error, state=%v error=%q", model.state, model.hostsError)
+	}
+}
+
+func networkModelAt(target networkActionID) NetworkModel {
+	model := NewNetworkModel()
+	model.actions.SelectByID(networkActionKey(target))
 	return model
 }

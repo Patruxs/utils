@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -101,8 +102,7 @@ type NetworkModel struct {
 	width            int
 	height           int
 	state            networkViewState
-	action           int
-	checkedActions   map[networkActionID]bool
+	actions          common.CheckboxListModel
 	persistentMode   bool
 	hostDomainInput  textinput.Model
 	hostIPInput      textinput.Model
@@ -286,7 +286,7 @@ func NewNetworkModelWithManager(manager corenetwork.NetworkManager) NetworkModel
 		keyMap:          newNetworkKeyMap(),
 		logViewer:       common.NewLogViewer(),
 		manager:         manager,
-		checkedActions:  make(map[networkActionID]bool),
+		actions:         newNetworkActionList(),
 		hostDomainInput: domainInput,
 		hostIPInput:     ipInput,
 	}
@@ -298,7 +298,33 @@ func (m NetworkModel) Init() tea.Cmd {
 	return nil
 }
 
+func newNetworkActionList() common.CheckboxListModel {
+	items := make([]common.CheckboxItem, 0, len(networkActions))
+	for _, action := range networkActions {
+		item := common.CheckboxItem{ID: networkActionKey(action.id), Label: action.title, Group: action.group, Tag: "read-only", TagTone: common.ToneSubtle}
+		if !isReadOnlyNetworkAction(action.id) {
+			item.Tag, item.TagTone = "● writes", common.ToneWarning
+		}
+		items = append(items, item)
+	}
+	list := common.NewCheckboxList(items, 0, 0)
+	list.SetHideDetails(true)
+	list.SetFocused(true)
+	return list
+}
+
+func networkActionKey(id networkActionID) string {
+	return strconv.Itoa(int(id))
+}
+
 func (m NetworkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	model := next.(NetworkModel)
+	model.layoutComponents()
+	return model, cmd
+}
+
+func (m NetworkModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	if m.state == networkStateRunning {
 		var cmd tea.Cmd
@@ -348,12 +374,15 @@ func (m NetworkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case networkStateSelectingOptions:
 			switch {
-			case key.Matches(msg, common.DefaultKeys.Up):
-				m.moveActions(-1)
-			case key.Matches(msg, common.DefaultKeys.Down):
-				m.moveActions(1)
+			case key.Matches(msg, common.DefaultKeys.Up, common.DefaultKeys.Down):
+				m.notice = ""
+				var cmd tea.Cmd
+				m.actions, cmd = m.actions.Update(msg)
+				return m, cmd
 			case key.Matches(msg, m.keyMap.Toggle):
-				m.toggleCurrentAction()
+				var cmd tea.Cmd
+				m.actions, cmd = m.actions.ToggleSelected()
+				return m, cmd
 			case key.Matches(msg, m.keyMap.Run):
 				return m.startSelectedAction()
 			}
@@ -418,6 +447,11 @@ func (m NetworkModel) View() string {
 
 func (m *NetworkModel) layoutComponents() {
 	width, height := m.bodySize()
+	if m.notice != "" {
+		height = common.MaxInt(1, height-lipgloss.Height(common.Notice(width, common.ToneWarning, m.notice)))
+	}
+	listWidth, listRows := m.actionListSize(width, height)
+	m.actions.SetSize(listWidth, listRows)
 	inputWidth := common.MaxInt(10, width-len("│ ▸ domain  ")-4)
 	m.hostDomainInput.Width = inputWidth
 	m.hostIPInput.Width = inputWidth
@@ -428,12 +462,39 @@ func (m *NetworkModel) layoutComponents() {
 }
 
 func (m NetworkModel) actionsView(width, height int) string {
+	listWidth, _ := m.actionListSize(width, height)
+	actions := common.Panel{Title: "Actions", Meta: m.listPosition(), Variant: common.PanelFocused, Width: listWidth + 4}.Render(m.actions.View())
 	if width >= networkWideMinWidth {
-		return m.wideActionsView(width, height)
+		rightWidth := width - listWidth - 4 - 1
+		detail := common.Panel{Title: m.currentAction().title, Width: rightWidth}.Render(strings.Join(m.actionDetailLines(rightWidth-4), "\n"))
+		session := common.Panel{Title: "Session", Width: rightWidth}.Render(strings.Join(m.sessionLines(rightWidth-4), "\n"))
+		right := detail
+		if lipgloss.Height(detail)+lipgloss.Height(session) <= height {
+			right += "\n" + session
+		}
+		return lipgloss.JoinHorizontal(lipgloss.Top, actions, " ", right)
 	}
 
-	detail := m.actionDetailLines(width - 4)
-	detailRows := common.MinInt(len(detail), networkDetailMaxRows)
+	detailRows, sessionRows := m.narrowDetailRows(width, height)
+	rows := []string{actions}
+	detail := firstLines(m.actionDetailLines(width-4), detailRows)
+	rows = append(rows, common.Panel{Title: m.currentAction().title, Width: width}.Render(strings.Join(detail, "\n")))
+	if sessionRows > 0 {
+		rows = append(rows, common.Truncate(common.Muted.Render(m.persistentModeLine()), width))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m NetworkModel) actionListSize(width, height int) (int, int) {
+	if width >= networkWideMinWidth {
+		return width*45/100 - 4, common.MaxInt(networkListMinRows, height-2)
+	}
+	detailRows, sessionRows := m.narrowDetailRows(width, height)
+	return width - 4, common.MaxInt(networkListMinRows, height-(detailRows+2)-sessionRows-2)
+}
+
+func (m NetworkModel) narrowDetailRows(width, height int) (int, int) {
+	detailRows := common.MinInt(len(m.actionDetailLines(width-4)), networkDetailMaxRows)
 	sessionRows := 1
 	listRows := func() int { return height - (detailRows + 2) - sessionRows - 2 }
 	if listRows() < networkSessionMinListRows {
@@ -442,37 +503,11 @@ func (m NetworkModel) actionsView(width, height int) string {
 	if listRows() < networkSessionMinListRows {
 		detailRows = common.MinInt(detailRows, networkDetailTightRows)
 	}
-
-	rows := []string{m.actionsPanel(width, common.MaxInt(networkListMinRows, listRows()))}
-	rows = append(rows, common.Panel{Title: m.currentAction().title, Width: width}.Render(strings.Join(firstLines(detail, detailRows), "\n")))
-	if sessionRows > 0 {
-		rows = append(rows, common.Truncate(common.Muted.Render(m.persistentModeLine()), width))
-	}
-	return strings.Join(rows, "\n")
-}
-
-func (m NetworkModel) wideActionsView(width, height int) string {
-	leftWidth := width * 45 / 100
-	rightWidth := width - leftWidth - 1
-
-	detail := common.Panel{Title: m.currentAction().title, Width: rightWidth}.Render(strings.Join(m.actionDetailLines(rightWidth-4), "\n"))
-	session := common.Panel{Title: "Session", Width: rightWidth}.Render(strings.Join(m.sessionLines(rightWidth-4), "\n"))
-	right := detail
-	if lipgloss.Height(detail)+lipgloss.Height(session) <= height {
-		right += "\n" + session
-	}
-
-	left := m.actionsPanel(leftWidth, common.MaxInt(networkListMinRows, height-2))
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
-}
-
-func (m NetworkModel) actionsPanel(width, rows int) string {
-	panel := common.Panel{Title: "Actions", Meta: m.listPosition(), Variant: common.PanelFocused, Width: width}
-	return panel.Render(m.renderActions(rows))
+	return detailRows, sessionRows
 }
 
 func (m NetworkModel) listPosition() string {
-	return fmt.Sprintf("%d/%d · %d checked", m.action+1, len(networkActions), len(m.selectedActionIDs()))
+	return fmt.Sprintf("%d/%d · %d checked", m.actionIndex()+1, len(networkActions), len(m.selectedActionIDs()))
 }
 
 func (m NetworkModel) actionDetailLines(width int) []string {
@@ -606,23 +641,6 @@ func (m NetworkModel) mouseInLogViewer(msg tea.MouseMsg) bool {
 	width, _ := m.bodySize()
 	top := lipgloss.Height(m.resultSummary(width))
 	return msg.Y > top && msg.Y <= top+m.logViewer.Height()
-}
-
-func (m *NetworkModel) moveActions(delta int) {
-	m.action = wrapIndex(m.action+delta, len(networkActions))
-	m.notice = ""
-}
-
-func (m *NetworkModel) toggleCurrentAction() {
-	action := m.currentAction().id
-	if m.checkedActions == nil {
-		m.checkedActions = make(map[networkActionID]bool)
-	}
-	if m.checkedActions[action] {
-		delete(m.checkedActions, action)
-		return
-	}
-	m.checkedActions[action] = true
 }
 
 func (m NetworkModel) startSelectedAction() (tea.Model, tea.Cmd) {
@@ -855,7 +873,9 @@ func (m NetworkModel) startRun(options networkRunOptions) (tea.Model, tea.Cmd) {
 	options.persistentMode = m.persistentMode
 	options.actions = actions
 	m.pendingRun = networkRunOptions{}
-	m.checkedActions = make(map[networkActionID]bool)
+	for _, action := range actions {
+		m.actions, _ = m.actions.SetChecked(networkActionKey(action), false)
+	}
 	m.running = actions
 	m.runStarted = time.Now()
 
@@ -881,59 +901,24 @@ func (m NetworkModel) OwnsKeys() bool {
 	return m.Running() || m.state == networkStateEditingHostsAdd || m.state == networkStateConfirmingWrite
 }
 
-func (m NetworkModel) renderActions(rows int) string {
-	var b strings.Builder
-	start, end := m.visibleActionRange(rows)
-	if start > 0 {
-		fmt.Fprintf(&b, "%s\n", common.Muted.Render(fmt.Sprintf("↑ %d more", start)))
-	}
-	for index := start; index < end; index++ {
-		action := networkActions[index]
-		cursor := "  "
-		label := action.title
-		if m.action == index {
-			cursor = common.Accent.Render("▸") + " "
-			label = lipgloss.NewStyle().Bold(true).Render(label)
+func (m NetworkModel) actionIndex() int {
+	selected := m.actions.Selected().ID
+	for index, action := range networkActions {
+		if networkActionKey(action.id) == selected {
+			return index
 		}
-		marker := "[ ]"
-		if m.checkedActions[action.id] {
-			marker = common.Success.Render("[x]")
-		}
-		fmt.Fprintf(&b, "%s%s %s\n", cursor, marker, label)
 	}
-	if end < len(networkActions) {
-		b.WriteString(common.Muted.Render(fmt.Sprintf("↓ %d more", len(networkActions)-end)))
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func (m NetworkModel) visibleActionRange(rows int) (int, int) {
-	rows = common.MinInt(common.MaxInt(1, rows-2), len(networkActions))
-	start := common.MaxInt(0, m.action-rows/2)
-	end := start + rows
-	if end > len(networkActions) {
-		end = len(networkActions)
-		start = common.MaxInt(0, end-rows)
-	}
-	return start, end
+	return 0
 }
 
 func (m NetworkModel) currentAction() networkActionItem {
-	index := m.action
-	if index < 0 || index >= len(networkActions) {
-		return networkActions[0]
-	}
-	return networkActions[index]
+	return networkActions[m.actionIndex()]
 }
 
 func (m NetworkModel) selectedActionIDs() []networkActionID {
-	if len(m.checkedActions) == 0 {
-		return nil
-	}
-
-	actions := make([]networkActionID, 0, len(m.checkedActions))
+	var actions []networkActionID
 	for _, action := range networkActions {
-		if m.checkedActions[action.id] {
+		if m.actions.Checked(networkActionKey(action.id)) {
 			actions = append(actions, action.id)
 		}
 	}
