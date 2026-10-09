@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -20,6 +21,7 @@ const (
 	hintSeparator   = " · "
 	infoSeparator   = " · "
 	headerMinGap    = 2
+	elideHeadShare  = 40
 	ruleLight       = "─"
 	ruleHeavy       = "━"
 	ruleHeavyStart  = "╴"
@@ -130,7 +132,31 @@ func Footer(width int, left, status string) string {
 	if width <= 0 {
 		return ""
 	}
-	return SpreadLine(width, left, Truncate(status, width))
+	return SpreadLine(width, singleLine(left), Truncate(singleLine(status), width))
+}
+
+func NoticeLine(width int, tone Tone, text string) string {
+	prefix := ""
+	if glyph := tone.Glyph(); glyph != "" {
+		prefix = glyph + " "
+	}
+	return tone.Style().Render(ElideMiddle(prefix+singleLine(text), width))
+}
+
+func ElideMiddle(text string, width int) string {
+	if lipgloss.Width(text) <= width {
+		return text
+	}
+	if width <= 1 {
+		return Truncate(text, width)
+	}
+	head := (width - 1) * elideHeadShare / 100
+	tail := width - 1 - head
+	return ansi.Truncate(text, head, "") + ellipsis + ansi.TruncateLeft(text, lipgloss.Width(text)-tail, "")
+}
+
+func singleLine(text string) string {
+	return strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(text)
 }
 
 func FooterRoom(width int, status string) int {

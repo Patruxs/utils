@@ -16,27 +16,24 @@ import (
 	"utils/internal/ui/views"
 )
 
-const canceledText = "Canceled. The run stopped early"
+const canceledText = "⚠ Canceled"
 
 func TestRouterEscCancelsRunningCleanupAndShowsCanceledResult(t *testing.T) {
 	run := newBlockingRun()
-	d := newDriver(t, cleanerFeature(run.cleaner))
+	d := newCleanerDriver(t, run)
 
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
-	d.send(tea.KeyMsg{Type: tea.KeyEnter})
+	d.send(key("y"))
 	run.waitStarted(t)
 
 	d.send(tea.KeyMsg{Type: tea.KeyEsc})
-	if view := d.view(); !strings.Contains(view, "Canceling cleanup") {
-		t.Fatalf("expected the cleaner to stay open and show it is canceling:\n%s", view)
-	}
+	d.pumpUntil(func() bool { return strings.Contains(d.view(), "Canceling cleanup") })
 	run.waitCanceled(t)
 	close(run.release)
 
 	d.pumpUntil(func() bool { return strings.Contains(d.view(), canceledText) })
-	view := d.view()
-	if !strings.Contains(view, "fake run stopped") || strings.Contains(view, "Completed with errors") {
-		t.Fatalf("expected the canceled run's result, not an error summary:\n%s", view)
+	if view := d.view(); strings.Contains(view, "FAILED") {
+		t.Fatalf("expected the canceled run's result, not a failure:\n%s", view)
 	}
 }
 
@@ -60,10 +57,10 @@ func TestRouterEscCancelsRunningDiagnosticsAndShowsCanceledResult(t *testing.T) 
 
 func TestRouterCtrlCDuringRunCancelsAndQuitsOnlyAfterRunFinishes(t *testing.T) {
 	run := newBlockingRun()
-	d := newDriver(t, cleanerFeature(run.cleaner))
+	d := newCleanerDriver(t, run)
 
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
-	d.send(tea.KeyMsg{Type: tea.KeyEnter})
+	d.send(key("y"))
 	run.waitStarted(t)
 
 	d.send(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -79,10 +76,10 @@ func TestRouterCtrlCDuringRunCancelsAndQuitsOnlyAfterRunFinishes(t *testing.T) {
 
 func TestRouterSecondCtrlCQuitsWithoutWaitingForRun(t *testing.T) {
 	run := newBlockingRun()
-	d := newDriver(t, cleanerFeature(run.cleaner))
+	d := newCleanerDriver(t, run)
 
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
-	d.send(tea.KeyMsg{Type: tea.KeyEnter})
+	d.send(key("y"))
 	run.waitStarted(t)
 
 	d.send(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -91,21 +88,22 @@ func TestRouterSecondCtrlCQuitsWithoutWaitingForRun(t *testing.T) {
 	close(run.release)
 }
 
-func TestRouterEscAtCleanerPromptsReturnsToOptions(t *testing.T) {
+func TestRouterEscAtCleanerConfirmReturnsToScope(t *testing.T) {
 	run := newBlockingRun()
-	d := newDriver(t, cleanerFeature(run.cleaner))
+	d := newCleanerDriver(t, run)
 
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
-	d.send(tea.KeyMsg{Type: tea.KeyEsc})
-	if view := d.view(); !strings.Contains(view, "Options") || strings.Contains(view, "Choose cleanup mode") {
-		t.Fatalf("expected esc at the mode prompt to return to the cleaner options:\n%s", view)
+	if view := d.view(); !strings.Contains(view, "Delete 1 file") {
+		t.Fatalf("expected enter to open the delete confirm:\n%s", view)
 	}
-
-	d.send(tea.KeyMsg{Type: tea.KeyEnter})
-	d.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
 	d.send(tea.KeyMsg{Type: tea.KeyEsc})
-	if view := d.view(); !strings.Contains(view, "Options") || strings.Contains(view, "Execute mode will delete") {
-		t.Fatalf("expected esc at the execute confirmation to return to the cleaner options:\n%s", view)
+	if view := d.view(); !strings.Contains(view, "Scope") || strings.Contains(view, "Delete 1 file") {
+		t.Fatalf("expected esc at the delete confirm to return to the scope:\n%s", view)
+	}
+	select {
+	case <-run.started:
+		t.Fatal("esc at the confirm must not start the cleanup")
+	default:
 	}
 }
 
@@ -262,8 +260,18 @@ type modelFeature struct {
 func (f modelFeature) Title() string    { return f.title }
 func (f modelFeature) Model() tea.Model { return f.model() }
 
+func newCleanerDriver(t *testing.T, run *blockingRun) *driver {
+	d := newDriver(t, cleanerFeature(run.cleaner))
+	d.start(d.router.Init())
+	d.pumpUntil(func() bool { return strings.Contains(d.view(), "1 to delete") })
+	return d
+}
+
 func cleanerFeature(run views.CleanerRunFunc) ui.AppFeature {
-	return modelFeature{title: "Cleaner", model: func() tea.Model { return views.NewCleanerModelWithRunner(run) }}
+	plan := func(context.Context, cleaner.Options) (cleaner.Plan, error) {
+		return cleaner.Plan{Groups: []cleaner.PlanGroup{{ID: cleaner.GroupCredentials, Entries: []cleaner.PlanEntry{{Path: "/home/dev/.npmrc"}}}}}, nil
+	}
+	return modelFeature{title: "Cleaner", model: func() tea.Model { return views.NewCleanerModelWith(plan, run, cleaner.SaveLog) }}
 }
 
 func networkFeature(commands corenetwork.CommandRunner) ui.AppFeature {
