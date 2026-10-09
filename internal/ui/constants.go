@@ -1,11 +1,12 @@
 package ui
 
-const (
-	footerHeight      = 1
-	logoMinBodyHeight = 19
+import "time"
 
-	featureCleanerTitle       = "System & Credential Cleaner"
-	featureCleanerDescription = "Dry-run-first cleanup of local dev credential and token files, with opt-in SSH keys, histories, browser data, and full tool reset."
-	featureNetworkTitle       = "Network & Diagnostics Manager"
-	featureNetworkDescription = "Inspect and diagnose networking, then apply confirmed, elevated DNS, DoH, MTU, and hosts changes."
+const (
+	footerHeight   = 1
+	maxFooterHints = 6
+	noticeDuration = 6 * time.Second
+
+	featureCleanerTitle = "Cleaner"
+	featureNetworkTitle = "Network"
 )

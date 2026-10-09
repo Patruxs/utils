@@ -1,7 +1,7 @@
 package router_test
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -9,76 +9,26 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"utils/internal/ui"
+	"utils/internal/ui/common"
 )
 
-func TestRouterOpensCleanerAndReturnsToMenu(t *testing.T) {
-	router := ui.NewRouter()
+func TestRouterSwitchesToolsAndKeepsEachViewState(t *testing.T) {
+	var router tea.Model = ui.NewRouter(stubFeature("Alpha"), stubFeature("Beta"))
+	router, _ = router.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-	model, cmd := router.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	if cmd != nil {
-		t.Fatal("window resize should not return a command while on menu")
-	}
-	router = model.(ui.Router)
-
-	model, cmd = router.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd != nil {
-		t.Fatal("cleaner init should not return a command")
-	}
-	router = model.(ui.Router)
-
-	if view := router.View(); !strings.Contains(view, "System & Credential Cleaner") || strings.Contains(view, "Network & Diagnostics Manager") {
-		t.Fatalf("expected cleaner view after enter, got:\n%s", view)
-	}
-
-	model, cmd = router.Update(key("q"))
-	if cmd != nil {
-		t.Fatal("returning to menu should not return a command")
-	}
-	router = model.(ui.Router)
-
-	if view := router.View(); !strings.Contains(view, "System & Credential Cleaner") || !strings.Contains(view, "Network & Diagnostics Manager") {
-		t.Fatalf("expected menu view after q, got:\n%s", view)
-	}
-}
-
-func TestRouterMenuRendersFeatureList(t *testing.T) {
-	router := ui.NewRouter()
-	model, _ := router.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	router = model.(ui.Router)
-
-	view := router.View()
-	for _, want := range []string{
-		"System & Credential Cleaner",
+	router, _ = router.Update(key("x"))
+	for _, step := range []struct {
+		key  tea.KeyMsg
+		want string
+	}{
+		{tea.KeyMsg{Type: tea.KeyTab}, "Beta keys: activated"},
+		{key("y"), "Beta keys: activated y"},
+		{key("1"), "Alpha keys: x activated"},
+		{key("2"), "Beta keys: activated y activated"},
 	} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("menu view missing %q:\n%s", want, view)
-		}
-	}
-
-	for _, removed := range []string{
-		"Infrastructure & Cloud Manager",
-		"Application Deployment Helper",
-		"Centralized developer and system utilities.",
-	} {
-		if strings.Contains(view, removed) {
-			t.Fatalf("menu view should not render removed feature %q:\n%s", removed, view)
-		}
-	}
-}
-
-func TestRouterMenuRendersLogoAndVersion(t *testing.T) {
-	router := ui.NewRouterWithVersion("v1.2.3")
-	model, _ := router.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	router = model.(ui.Router)
-
-	view := router.View()
-	for _, want := range []string{
-		"\u2588\u2588",
-		"version",
-		"v1.2.3",
-	} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("menu view missing %q:\n%s", want, view)
+		router, _ = router.Update(step.key)
+		if view := router.View(); !strings.Contains(view, step.want) {
+			t.Fatalf("after %q expected %q:\n%s", step.key, step.want, view)
 		}
 	}
 }
@@ -86,92 +36,58 @@ func TestRouterMenuRendersLogoAndVersion(t *testing.T) {
 func TestRouterQuitKeysReturnCommand(t *testing.T) {
 	router := ui.NewRouter()
 
-	_, cmd := router.Update(key("q"))
-	if cmd == nil {
-		t.Fatal("q on the menu should return a quit command")
+	if _, cmd := router.Update(key("q")); cmd == nil {
+		t.Fatal("q should return a quit command")
 	}
-
-	_, cmd = router.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	if cmd == nil {
+	if _, cmd := router.Update(tea.KeyMsg{Type: tea.KeyCtrlC}); cmd == nil {
 		t.Fatal("ctrl+c should return a quit command")
 	}
 }
 
-func TestRouterAcceptsInjectedFeatureRegistry(t *testing.T) {
-	router := ui.NewRouter(testFeature{
-		title:       "Injected Tool",
-		description: "Feature supplied by a registry.",
-	})
-
-	model, _ := router.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	router = model.(ui.Router)
-
-	if view := router.View(); !strings.Contains(view, "Injected Tool") {
-		t.Fatalf("menu view missing injected feature:\n%s", view)
+func TestRouterHelpOverlayOpensAndCloses(t *testing.T) {
+	var router tea.Model = ui.NewRouterWithVersion("v1.2.3", stubFeature("Alpha"))
+	router, _ = router.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if view := router.View(); !strings.Contains(view, "v1.2.3") || strings.Contains(view, "\u2588\u2588") {
+		t.Fatalf("expected the version in the header and no banner before ?:\n%s", view)
 	}
 
-	model, cmd := router.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd != nil {
-		t.Fatal("test feature init should not return a command")
+	router, _ = router.Update(key("?"))
+	if view := router.View(); !strings.Contains(view, "\u2588\u2588") || !strings.Contains(view, "switch tool") {
+		t.Fatalf("expected ? to open the help overlay with the banner and keys:\n%s", view)
 	}
-	router = model.(ui.Router)
-
-	if view := router.View(); !strings.Contains(view, "Injected Tool View") {
-		t.Fatalf("expected injected feature model after enter, got:\n%s", view)
+	router, _ = router.Update(key("x"))
+	router, _ = router.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if view := router.View(); strings.Contains(view, "\u2588\u2588") || !strings.Contains(view, "Alpha keys:") || strings.Contains(view, "Alpha keys: x") {
+		t.Fatalf("expected esc to close the overlay without handing keys to the view:\n%s", view)
 	}
 }
 
-func key(value string) tea.KeyMsg {
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(value)}
-}
+func TestRouterRefusesToolSwitchWhileRunning(t *testing.T) {
+	busy := stubFeature("Busy")
+	busy.model.running = true
+	var router tea.Model = ui.NewRouter(busy, stubFeature("Other"))
+	router, _ = router.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 
-type testFeature struct {
-	title       string
-	description string
-	rows        int
-}
-
-func (f testFeature) Title() string {
-	return f.title
-}
-
-func (f testFeature) Description() string {
-	return f.description
-}
-
-func (f testFeature) Model() tea.Model {
-	return testModel{view: f.title + " View" + strings.Repeat("\n"+strings.Repeat("x", 300), f.rows)}
-}
-
-type testModel struct {
-	view  string
-	mouse *tea.MouseMsg
-}
-
-func (m testModel) Init() tea.Cmd {
-	return nil
-}
-
-func (m testModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if mouse, ok := msg.(tea.MouseMsg); ok {
-		m.mouse = &mouse
+	for _, msg := range []tea.KeyMsg{{Type: tea.KeyTab}, key("2"), key("q"), key("?")} {
+		router, _ = router.Update(msg)
 	}
-	return m, nil
-}
-
-func (m testModel) View() string {
-	if m.mouse != nil {
-		return fmt.Sprintf("mouse at %d,%d", m.mouse.X, m.mouse.Y)
+	view := router.View()
+	if !strings.Contains(view, "Busy keys: q ?") || strings.Contains(view, "Other keys") {
+		t.Fatalf("expected the running view to stay active and receive q and ?:\n%s", view)
 	}
-	return m.view
+	router, _ = router.Update(key("2"))
+	if view := router.View(); !strings.Contains(view, "A run is in progress") {
+		t.Fatalf("expected a notice that switching is refused:\n%s", view)
+	}
 }
 
 func TestRouterFrameFillsTerminalWithViewInsideIt(t *testing.T) {
-	for _, size := range []tea.WindowSizeMsg{{Width: 80, Height: 24}, {Width: 120, Height: 40}, {Width: 40, Height: 10}} {
-		tall := testFeature{title: "Tall", description: "Tall", rows: 200}
-		var router tea.Model = ui.NewRouter(tall)
+	for _, size := range []tea.WindowSizeMsg{{Width: 80, Height: 24}, {Width: 120, Height: 40}, {Width: 50, Height: 10}, {Width: 40, Height: 8}} {
+		tall := stubFeature("Tall")
+		tall.model.rows = 200
+		var router tea.Model = ui.NewRouter(tall, stubFeature("Other"))
 		router, _ = router.Update(size)
-		for _, screen := range []string{"menu", "view"} {
+		for _, screen := range []string{"view", "help"} {
 			view := router.View()
 			rows := strings.Split(view, "\n")
 			if len(rows) != size.Height {
@@ -182,26 +98,68 @@ func TestRouterFrameFillsTerminalWithViewInsideIt(t *testing.T) {
 					t.Fatalf("%s at %dx%d: row wider than the terminal: %q", screen, size.Width, size.Height, row)
 				}
 			}
-			router, _ = router.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			router, _ = router.Update(key("?"))
 		}
 	}
 }
 
 func TestRouterHandsMouseToViewInBodyCoordinates(t *testing.T) {
-	var router tea.Model = ui.NewRouter(testFeature{title: "Mouse", description: "Mouse"})
+	var router tea.Model = ui.NewRouter(stubFeature("Mouse"))
 	router, _ = router.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	router, _ = router.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
 	rows := strings.Split(router.View(), "\n")
 	firstBodyRow := 0
 	for index, row := range rows {
-		if strings.Contains(row, "Mouse View") {
+		if strings.Contains(row, "Mouse keys:") {
 			firstBodyRow = index
 		}
 	}
 	router, _ = router.Update(tea.MouseMsg{X: 1, Y: firstBodyRow, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
 
-	if view := router.View(); !strings.Contains(view, "mouse at 0,0") {
+	if view := router.View(); !strings.Contains(view, "mouse 0,0") {
 		t.Fatalf("expected a click on the first body row to reach the view at 0,0:\n%s", view)
 	}
 }
+
+func key(value string) tea.KeyMsg {
+	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(value)}
+}
+
+type testFeature struct {
+	title string
+	model stubModel
+}
+
+func stubFeature(title string) testFeature {
+	return testFeature{title: title, model: stubModel{name: title}}
+}
+
+func (f testFeature) Title() string    { return f.title }
+func (f testFeature) Model() tea.Model { return f.model }
+
+type stubModel struct {
+	name    string
+	events  []string
+	rows    int
+	running bool
+}
+
+func (m stubModel) Init() tea.Cmd { return nil }
+
+func (m stubModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		m.events = append(m.events, msg.String())
+	case common.ActivatedMsg:
+		m.events = append(m.events, "activated")
+	case tea.MouseMsg:
+		m.events = append(m.events, "mouse "+strconv.Itoa(msg.X)+","+strconv.Itoa(msg.Y))
+	}
+	return m, nil
+}
+
+func (m stubModel) View() string {
+	return m.name + " keys: " + strings.Join(m.events, " ") + strings.Repeat("\n"+strings.Repeat("x", 300), m.rows)
+}
+
+func (m stubModel) Running() bool { return m.running }
