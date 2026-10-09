@@ -1,189 +1,88 @@
-# UTILS Developer Hub
+# UTILS
 
-UTILS is a small terminal utility hub for scripts and workflows used during local development, network diagnostics, configuration, and cleanup tasks.
+A single-binary terminal app for developer machines. Two tools, one screen each:
 
-The project is written in Go and builds into a single executable. After it is built, you do not need Node.js, Python, or any other scripting runtime to run the utility.
+- **Cleaner** removes local credentials and tokens. It shows exactly what it would delete before you confirm, and it never deletes outside your user profile.
+- **Network** shows your current adapter, IP, DNS, and MTU, and lets you switch DNS, flush caches, edit the hosts file, and clear browser caches. Every change is listed before it runs.
 
-## Current Utilities
+Works on Linux, macOS, and Windows (`amd64` and `arm64`). No Go, Node, Python, or admin rights needed to install.
 
-| Area | Feature | What it does |
-| --- | --- | --- |
-| Cleaner | System & Credential Cleaner | Dry-run-first local cleanup for developer machines. |
-| Cleaner | Dry-run mode | Shows what would be deleted without removing files. |
-| Cleaner | Execute mode | Deletes selected matching local files. |
-| Cleaner | Developer credentials | Cleans local cloud, Git, Docker, Kubernetes, package-manager, and IaC credential and token files. |
-| Cleaner | AI tool credentials | Cleans Codex, Claude, and Gemini sign-in files. |
-| Cleaner | Copilot and Visual Studio sign-ins | Cleans GitHub Copilot sign-in tokens and, on Windows, the Visual Studio identity cache. VS Code sign-ins live in VS Code global state, which only Full tool reset removes. |
-| Cleaner | Full tool reset | Optionally removes whole tool folders and settings: `.gitconfig`, `.mongorc.js`, cloud CLI folders, AI tool data, installed runtimes such as Bun and Deno, local VMs such as Lima, Colima, Minikube, and Vagrant, VS Code global state (settings database, extension state, sign-ins), other IDE data and history, and Copilot extensions. |
-| Cleaner | SSH cleanup | Optionally includes SSH config, known hosts, and key files. |
-| Cleaner | Shell/tool history | Optionally cleans shell, REPL, database, debugger, and CLI history files, which may hold typed secrets. |
-| Cleaner | Browser profile cleanup | Optionally removes Chrome/Chromium, Edge, Brave, CocCoc, Firefox, and Safari caches plus browser sign-ins, cookies, sessions, passwords, extensions, storage, history, and bookmarks. |
-| Cleaner | Windows Credential Manager | Optionally deletes allowlisted developer credentials on Windows. |
-| Cleaner | Force-stop target apps | Optionally stops browsers and IDEs before cleanup. |
-| Cleaner | User-profile safety guard | Deletes only inside the current user profile, never through a link that leads outside it, and removes a symlinked file's link without touching its target. |
-| Network | Network & Diagnostics Manager | Inspects, diagnoses, cleans caches, and configures networking. |
-| Network | View current config | Shows adapter, DNS, IP, MTU, DoH, hosts, and ping information. |
-| Network | Diagnostics | Tests connectivity, DNS resolution, and ping quality. |
-| Network | Apply network config | Applies DNS, DoH where supported, and MTU 1500. |
-| Network | Cloudflare DNS | Sets `1.1.1.1` and `1.0.0.1`. |
-| Network | Google DNS | Sets `8.8.8.8` and `8.8.4.4`. |
-| Network | OpenDNS | Sets `208.67.222.222` and `208.67.220.220`. |
-| Network | Quad9 DNS | Sets `9.9.9.9` and `149.112.112.112`. |
-| Network | Flush DNS cache | Flushes OS DNS caches. |
-| Network | Enable DoH | Enables Windows DNS over HTTPS templates where supported. |
-| Network | Disable DoH | Removes Windows DNS over HTTPS entries where supported. |
-| Network | Optimize network settings | Applies TCP/MTU optimizations. |
-| Network | Reset network optimizations | Resets TCP/Winsock or best-effort platform equivalents. |
-| Network | Reset DNS | Restores automatic/default resolver behavior. |
-| Network | Reset defaults | Resets DNS, disables DoH where supported, and clears persistent DNS settings. |
-| Network | Hosts view | Reads the hosts file. |
-| Network | Hosts backup | Creates a timestamped `hosts.backup-<time>`. |
-| Network | Hosts add | Adds an IP/domain hosts entry tagged `# utils-managed`. |
-| Network | Hosts remove managed | Removes only entries tagged `# utils-managed`; other lines stay. |
-| Network | Hosts restore | Saves the current file as `hosts.before-restore-<time>`, then restores the newest `hosts.backup-<time>`. |
-| Network | Clear Chrome/Chromium cache | Clears Chrome and Chromium cache/code-cache paths. |
-| Network | Clear Firefox cache | Clears Firefox `cache2` folders. |
-| Network | Clear Edge cache | Clears Microsoft Edge cache/code-cache paths. |
-| Network | Clear Brave cache | Clears Brave cache/code-cache paths. |
-| Network | Clear Opera cache | Clears Opera cache/code-cache paths. |
-| Network | Clear all browser caches | Runs all supported browser cache cleaners. |
-| Network | Persistent DNS status | Shows saved persistent DNS mode and values. |
-| Network | Persistent DNS toggle | Turns persistent DNS mode on or off. |
-| Network | Persistent DNS apply | Applies saved DNS values. |
-| Network | Persistent DNS clear | Removes saved persistent DNS settings. |
+## Install
 
-## Requirements
-
-To install and run a published UTILS binary, you do not need Go, GitHub CLI, Node.js, Python, or administrator permissions.
-
-To run from source or build the executable, install Go matching the version in `go.mod`.
-
-## Installation
-
-Prebuilt binaries are published for Linux, macOS, and Windows on `amd64` and `arm64`. The installers download the latest GitHub Release over HTTPS, check its sha256 against the release's `checksums.txt`, and stop without installing if the check fails.
-
-### Linux & macOS
-
-Install with the shell installer:
+Linux and macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Patruxs/utils/main/install.sh | bash
+curl --proto '=https' -fsSL https://raw.githubusercontent.com/Patruxs/utils/main/install.sh | bash
 ```
 
-It installs `utils` into `~/.local/bin` without `sudo`. Both installers read these environment variables:
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `UTILS_INSTALL_DIR` | `~/.local/bin`, or `%USERPROFILE%\utils_bin` on Windows | Install directory |
-| `UTILS_REPO` | `Patruxs/utils` | GitHub repository to download releases from |
-| `UTILS_BIN` | `utils` | Binary and release asset name, for forks that rename it |
-
-Alternatively, install with Homebrew:
+Or with Homebrew:
 
 ```sh
-brew tap Patruxs/tap
-brew install utils
+brew tap Patruxs/tap && brew install utils
 ```
 
-### Windows
-
-Install with the PowerShell installer:
+Windows (PowerShell):
 
 ```powershell
-$installer = Join-Path $env:TEMP 'utils-install.ps1'
-Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/Patruxs/utils/main/install.ps1' -OutFile $installer
-powershell -NoProfile -ExecutionPolicy Bypass -File $installer -AddToPath
+$i = Join-Path $env:TEMP 'utils-install.ps1'
+Invoke-WebRequest 'https://raw.githubusercontent.com/Patruxs/utils/main/install.ps1' -OutFile $i
+powershell -NoProfile -ExecutionPolicy Bypass -File $i -AddToPath
 ```
 
-Then open a new PowerShell window and run:
-
-```powershell
-utils
-```
-
-If you do not use `-AddToPath`, run it from the default install directory:
-
-```powershell
-& "$env:USERPROFILE\utils_bin\utils.exe"
-```
-
-Windows users can also install with Scoop:
+Or with Scoop:
 
 ```powershell
 scoop bucket add utils https://github.com/Patruxs/scoop-bucket.git
 scoop install utils
 ```
 
-If you see `Access to the path 'C:\WINDOWS\System32\install.ps1' is denied`, you are using an old command that saves the installer into the current directory. Use the `$env:TEMP` command above instead.
+The installers verify the download against the release `checksums.txt` and refuse to install on mismatch. Default install directory is `~/.local/bin` on Linux and macOS, `%USERPROFILE%\utils_bin` on Windows. Set `UTILS_INSTALL_DIR` to change it.
 
-If the installer says `No published GitHub Release found`, UTILS has not published a downloadable Windows binary yet. The Windows installer does not require Go or GitHub CLI, but it does require a published GitHub Release asset such as `utils_v0.1.0_windows_amd64.zip`.
-
-If you installed with Homebrew or Scoop, update and uninstall with `brew upgrade utils` / `brew uninstall utils` or `scoop update utils` / `scoop uninstall utils`; `utils --update` and `utils --uninstall` print that command and exit.
-
-Release publishing and download verification are described in [docs/RELEASE.md](docs/RELEASE.md).
-
-## Development
-
-These commands are only for contributors who want to run or build UTILS from source.
-
-Run from source:
-
-```powershell
-go run ./cmd/tui
-```
-
-Windows:
-
-```powershell
-go build -o bin/utils.exe ./cmd/tui
-```
-
-Linux or macOS:
+## Use
 
 ```sh
+utils
+```
+
+| Key | Does |
+| --- | --- |
+| `tab`, `1`, `2` | Switch between Cleaner and Network |
+| `↑` `↓` | Move |
+| `space` | Toggle an option, or add a network action to a batch |
+| `enter` | Run (asks for confirmation before anything is deleted or changed) |
+| `d` | Cleaner: save the current preview as a dry-run log |
+| `r` | Network: refresh the status card |
+| `esc` | Cancel a running action, or go back |
+| `?` | Help |
+| `q` | Quit |
+
+Network changes need `sudo` on Linux and macOS and run `sudo -v` first so it is cached. On Windows they ask for elevation.
+
+Other commands:
+
+```sh
+utils --version
+utils --update
+utils --uninstall
+utils --showPath
+```
+
+If you installed with Homebrew or Scoop, use `brew upgrade utils` or `scoop update utils` instead of `--update`.
+
+## Cleaner scope
+
+Always on: credential and token files for cloud CLIs, Git, Docker, Kubernetes, package managers, and AI tools.
+
+Opt-in: SSH keys, shell and tool history, browser profiles, Windows Credential Manager entries, force-stopping running browsers and editors, and a full tool reset that removes whole tool folders and settings.
+
+The preview lists every file before you confirm. Deletion is not undoable, so revoke remote tokens and sessions from their admin portals afterwards.
+
+## Develop
+
+```sh
+go run ./cmd/tui
+go test ./...
 go build -o bin/utils ./cmd/tui
 ```
 
-## Run The Built App
-
-Windows:
-
-```powershell
-.\bin\utils.exe
-```
-
-Linux or macOS:
-
-```sh
-./bin/utils
-```
-
-## Most Use Commands
-
-| Task | Command |
-| --- | --- |
-| Show the installed executable path | `utils --showPath` |
-| Update UTILS to the latest GitHub Release | `utils --update` |
-| Remove the currently running UTILS executable, after confirmation | `utils --uninstall` |
-| Show the current UTILS version | `utils --version` |
-| Show available UTILS commands | `utils --help` |
-
-## Build For Another OS
-
-From PowerShell, set the target OS and architecture before building:
-
-```powershell
-$env:GOOS = "linux"
-$env:GOARCH = "amd64"
-go build -o bin/utils-linux-amd64 ./cmd/tui
-```
-
-Common `GOOS` values are `windows`, `linux`, and `darwin`. Common `GOARCH` values are `amd64` and `arm64`.
-
-## Test
-
-```powershell
-go test ./...
-```
-
-
+Releases are published by tagging `vX.Y.Z`. See [docs/RELEASE.md](docs/RELEASE.md).
