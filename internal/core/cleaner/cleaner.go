@@ -39,9 +39,13 @@ type Options struct {
 }
 
 type Entry struct {
-	Time    time.Time
-	Level   Level
-	Message string
+	Time       time.Time
+	Level      Level
+	Message    string
+	Target     string
+	Path       string
+	LinkTarget string
+	NotPresent bool
 }
 
 type Report struct {
@@ -283,7 +287,23 @@ func newCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 }
 
 func (r *Report) add(level Level, format string, args ...any) {
-	switch level {
+	r.record(Entry{Level: level, Message: fmt.Sprintf(format, args...)})
+}
+
+func (r *Report) addFor(level Level, target string, path string, format string, args ...any) {
+	r.record(Entry{Level: level, Target: target, Path: path, Message: fmt.Sprintf(format, args...)})
+}
+
+func (r *Report) addSymlinkRemoval(level Level, target string, path string, linkTarget string, format string, args ...any) {
+	r.record(Entry{Level: level, Target: target, Path: path, LinkTarget: linkTarget, Message: fmt.Sprintf(format, args...)})
+}
+
+func (r *Report) addNotPresent(target string, path string) {
+	r.record(Entry{Level: LevelSkip, Target: target, Path: path, NotPresent: true, Message: fmt.Sprintf("%s not found: %s", target, path)})
+}
+
+func (r *Report) record(entry Entry) {
+	switch entry.Level {
 	case LevelDelete:
 		r.Deleted++
 	case LevelDryRun:
@@ -296,11 +316,8 @@ func (r *Report) add(level Level, format string, args ...any) {
 		r.Errors++
 	}
 
-	r.Entries = append(r.Entries, Entry{
-		Time:    time.Now(),
-		Level:   level,
-		Message: fmt.Sprintf(format, args...),
-	})
+	entry.Time = time.Now()
+	r.Entries = append(r.Entries, entry)
 }
 
 func (r *Report) merge(other Report) {
@@ -341,35 +358,35 @@ func (c Cleaner) cleanPath(ctx context.Context, report *Report, home string, pat
 
 	realParent, err := c.fs.EvalSymlinks(filepath.Dir(path))
 	if errors.Is(err, os.ErrNotExist) {
-		report.add(LevelSkip, "%s not found: %s", label, path)
+		report.addNotPresent(label, path)
 		return nil
 	}
 	if err != nil {
-		report.add(LevelError, "Could not resolve %s: %s: %v", label, path, err)
+		report.addFor(LevelError, label, path, "Could not resolve %s: %s: %v", label, path, err)
 		return fmt.Errorf("resolve %s %q: %w", label, path, err)
 	}
 
 	realPath := filepath.Join(realParent, filepath.Base(path))
 	rel, ok := pathInsideHome(home, realPath)
 	if !ok {
-		report.add(LevelSkip, "Refusing to touch %s outside current user profile: %s resolves to %s", label, path, realPath)
+		report.addFor(LevelSkip, label, path, "Refusing to touch %s outside current user profile: %s resolves to %s", label, path, realPath)
 		return nil
 	}
 
 	root, err := c.fs.OpenRoot(home)
 	if err != nil {
-		report.add(LevelError, "Could not open user profile for %s: %s: %v", label, path, err)
+		report.addFor(LevelError, label, path, "Could not open user profile for %s: %s: %v", label, path, err)
 		return fmt.Errorf("open user profile for %s %q: %w", label, path, err)
 	}
 	defer root.Close()
 
 	info, err := root.Lstat(rel)
 	if errors.Is(err, os.ErrNotExist) {
-		report.add(LevelSkip, "%s not found: %s", label, path)
+		report.addNotPresent(label, path)
 		return nil
 	}
 	if err != nil {
-		report.add(LevelError, "Could not inspect %s: %s: %v", label, path, err)
+		report.addFor(LevelError, label, path, "Could not inspect %s: %s: %v", label, path, err)
 		return fmt.Errorf("inspect %s %q: %w", label, path, err)
 	}
 
@@ -378,20 +395,20 @@ func (c Cleaner) cleanPath(ctx context.Context, report *Report, home string, pat
 	}
 
 	if !execute {
-		report.add(LevelDryRun, "Would delete %s: %s", label, path)
+		report.addFor(LevelDryRun, label, path, "Would delete %s: %s", label, path)
 		return nil
 	}
 
 	if err := root.RemoveAll(rel); err != nil {
 		if info.IsDir() {
-			report.add(LevelError, "Could not fully delete %s: %s: %d items left inside: %v", label, path, countEntriesInside(root, rel), err)
+			report.addFor(LevelError, label, path, "Could not fully delete %s: %s: %d items left inside: %v", label, path, countEntriesInside(root, rel), err)
 			return fmt.Errorf("fully delete %s %q: %w", label, path, err)
 		}
-		report.add(LevelError, "Could not delete %s: %s: %v", label, path, err)
+		report.addFor(LevelError, label, path, "Could not delete %s: %s: %v", label, path, err)
 		return fmt.Errorf("delete %s %q: %w", label, path, err)
 	}
 
-	report.add(LevelDelete, "Deleted %s: %s", label, path)
+	report.addFor(LevelDelete, label, path, "Deleted %s: %s", label, path)
 	return nil
 }
 
@@ -405,16 +422,16 @@ func (c Cleaner) removeSymlink(report *Report, root *os.Root, rel string, path s
 	}
 
 	if !execute {
-		report.add(LevelDryRun, "Would remove symlink for %s: %s, target %s kept", label, path, target)
+		report.addSymlinkRemoval(LevelDryRun, label, path, target, "Would remove symlink for %s: %s, target %s kept", label, path, target)
 		return nil
 	}
 
 	if err := root.Remove(rel); err != nil {
-		report.add(LevelError, "Could not remove symlink for %s: %s: %v", label, path, err)
+		report.addFor(LevelError, label, path, "Could not remove symlink for %s: %s: %v", label, path, err)
 		return fmt.Errorf("remove symlink %s %q: %w", label, path, err)
 	}
 
-	report.add(LevelDelete, "Removed symlink for %s: %s, target %s kept", label, path, target)
+	report.addSymlinkRemoval(LevelDelete, label, path, target, "Removed symlink for %s: %s, target %s kept", label, path, target)
 	return nil
 }
 
@@ -644,7 +661,7 @@ func (c Cleaner) cleanCredentialManager(ctx context.Context, report *Report, exe
 		}
 
 		if !execute {
-			report.add(LevelDryRun, "Would delete Windows Credential Manager entry: %s", target)
+			report.addFor(LevelDryRun, targetLabelCredentialManagerEntry, target, "Would delete %s: %s", targetLabelCredentialManagerEntry, target)
 			continue
 		}
 
@@ -652,12 +669,12 @@ func (c Cleaner) cleanCredentialManager(ctx context.Context, report *Report, exe
 			if ctx.Err() != nil {
 				break
 			}
-			report.add(LevelError, "Could not delete Windows Credential Manager entry %s: %v", target, err)
+			report.addFor(LevelError, targetLabelCredentialManagerEntry, target, "Could not delete %s %s: %v", targetLabelCredentialManagerEntry, target, err)
 			runErrors = append(runErrors, fmt.Errorf("delete Windows Credential Manager entry %q: %w", target, err))
 			continue
 		}
 
-		report.add(LevelDelete, "Deleted Windows Credential Manager entry: %s", target)
+		report.addFor(LevelDelete, targetLabelCredentialManagerEntry, target, "Deleted %s: %s", targetLabelCredentialManagerEntry, target)
 	}
 
 	return errors.Join(runErrors...)
