@@ -103,6 +103,25 @@ func TestRouterFrameFillsTerminalWithViewInsideIt(t *testing.T) {
 	}
 }
 
+func TestRouterFrameKeepsItsHeightWithAnOverlongNotice(t *testing.T) {
+	var router tea.Model = ui.NewRouter(stubFeature("Alpha"))
+	router, _ = router.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	router, _ = router.Update(common.NoticeMsg{Tone: common.ToneDanger, Text: "Could not save the log: write cleanup log: open\n/home/pat/" + strings.Repeat("deep/", 20) + "offboarding-cleanup.log: read-only file system"})
+
+	rows := strings.Split(router.View(), "\n")
+	if len(rows) != 24 || !strings.Contains(rows[0], "UTILS") {
+		t.Fatalf("expected 24 rows with the header on top, got %d:\n%s", len(rows), strings.Join(rows, "\n"))
+	}
+	for _, row := range rows {
+		if lipgloss.Width(row) > 80 {
+			t.Fatalf("row wider than the terminal: %q", row)
+		}
+	}
+	if footer := rows[len(rows)-1]; !strings.Contains(footer, "Could not") || !strings.Contains(footer, "read-only file system") {
+		t.Fatalf("expected the notice to keep its head and its tail on one line: %q", footer)
+	}
+}
+
 func TestRouterHandsMouseToViewInBodyCoordinates(t *testing.T) {
 	var router tea.Model = ui.NewRouter(stubFeature("Mouse"))
 	router, _ = router.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
