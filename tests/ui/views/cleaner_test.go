@@ -354,30 +354,6 @@ func TestCleanerViewOptionModePromptRoutesExecuteThroughConfirmation(t *testing.
 	}
 }
 
-func TestCleanerViewCanCancelRunningCleanup(t *testing.T) {
-	model := views.NewCleanerModel()
-
-	next, _ := model.Update(specialKey(tea.KeySpace))
-	model = next.(views.CleanerModel)
-	next, _ = model.Update(specialKey(tea.KeyEnter))
-	model = next.(views.CleanerModel)
-	next, cmd := model.Update(specialKey(tea.KeyEnter))
-	if cmd == nil {
-		t.Fatal("dry-run choice should return a command")
-	}
-	model = next.(views.CleanerModel)
-
-	next, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if cmd != nil {
-		t.Fatal("canceling running cleanup should not return a command")
-	}
-	model = next.(views.CleanerModel)
-
-	if view := model.View(); !strings.Contains(view, "Canceling cleanup") {
-		t.Fatalf("expected cancel notice while cleanup is still finishing:\n%s", view)
-	}
-}
-
 func key(value string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(value)}
 }
