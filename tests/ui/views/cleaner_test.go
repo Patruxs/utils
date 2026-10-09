@@ -160,10 +160,10 @@ func TestCleanerViewWrapsStaticTextOnResize(t *testing.T) {
 	model = next.(views.CleanerModel)
 
 	view := stripANSI(model.View())
-	if strings.Contains(view, "Dry-run-first cleanup for local developer credentials") {
+	if strings.Contains(view, "Dry-run-first cleanup of local developer credential") {
 		t.Fatalf("expected subtitle to wrap after resize:\n%s", view)
 	}
-	if !strings.Contains(view, "Dry-run-first cleanup for local") || !strings.Contains(view, "credentials, shell history") {
+	if !strings.Contains(view, "Dry-run-first cleanup of local") || !strings.Contains(view, "credential and token files") {
 		t.Fatalf("expected wrapped subtitle content to remain visible:\n%s", view)
 	}
 }

@@ -65,6 +65,7 @@ const (
 type networkKeyMap struct {
 	Move       key.Binding
 	Select     key.Binding
+	AddEntry   key.Binding
 	Choose     key.Binding
 	Toggle     key.Binding
 	NextField  key.Binding
@@ -182,6 +183,10 @@ func newNetworkKeyMap() networkKeyMap {
 			key.WithKeys("enter"),
 			key.WithHelp("enter:", "run checked"),
 		),
+		AddEntry: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter:", "add entry"),
+		),
 		Choose: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter:", "apply choice"),
@@ -217,7 +222,7 @@ func (k networkContextualKeyMap) ShortHelp() []key.Binding {
 	case networkStateRunning:
 		return []key.Binding{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit}
 	case networkStateEditingHostsAdd:
-		return []key.Binding{k.NextField, k.Select, k.LeaveForm}
+		return []key.Binding{k.NextField, k.AddEntry, k.LeaveForm}
 	case networkStateConfirmingWrite:
 		return []key.Binding{k.Move, k.Choose, common.DefaultKeys.Yes, common.DefaultKeys.No}
 	case networkStateFinished:
@@ -232,7 +237,7 @@ func (k networkContextualKeyMap) FullHelp() [][]key.Binding {
 	case networkStateRunning:
 		return [][]key.Binding{{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit}}
 	case networkStateEditingHostsAdd:
-		return [][]key.Binding{{k.NextField, k.Select, k.LeaveForm}}
+		return [][]key.Binding{{k.NextField, k.AddEntry, k.LeaveForm}}
 	case networkStateConfirmingWrite:
 		return [][]key.Binding{{k.Move, k.Choose, common.DefaultKeys.Yes, common.DefaultKeys.No}}
 	case networkStateFinished:

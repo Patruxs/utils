@@ -414,6 +414,7 @@ func (m NetworkManager) EditHosts(ctx context.Context, opts HostsOptions) (Repor
 	m = m.withDefaults()
 	report := Report{Operation: "Edit Hosts File"}
 	if opts.Mode == HostsView {
+		report.Operation = "View Hosts File"
 		report.add(LevelInfo, "Viewing hosts file with standard user permissions.")
 		output, err := m.outputPlatformScript(ctx, windowsViewHostsScript(), darwinViewHostsScript(), linuxViewHostsScript())
 		report.addOutput(LevelInfo, output)
@@ -448,7 +449,7 @@ func (m NetworkManager) EditHosts(ctx context.Context, opts HostsOptions) (Repor
 func (m NetworkManager) PersistentStatus(ctx context.Context) (Report, error) {
 	m = m.withDefaults()
 	report := Report{Operation: "Persistent DNS Settings"}
-	settings, err := m.loadPersistentSettings(ctx, &report)
+	settings, err := m.loadPersistentSettings(ctx)
 	if wasCanceled(ctx, err) {
 		return report, report.addCanceled(ctx)
 	}
@@ -487,7 +488,7 @@ func (m NetworkManager) SetPersistentMode(ctx context.Context, enabled bool, opt
 func (m NetworkManager) ApplyPersistentSettings(ctx context.Context) (Report, error) {
 	m = m.withDefaults()
 	report := Report{Operation: "Apply Persistent DNS Settings"}
-	settings, err := m.loadPersistentSettings(ctx, &report)
+	settings, err := m.loadPersistentSettings(ctx)
 	if err != nil {
 		err = fmt.Errorf("could not load persistent settings: %w", err)
 		err = report.finish(ctx, err, "")
@@ -575,16 +576,12 @@ func (m NetworkManager) clearPersistentSettings(ctx context.Context, report *Rep
 	return nil
 }
 
-func (m NetworkManager) loadPersistentSettings(ctx context.Context, report *Report) (PersistentSettings, error) {
+func (m NetworkManager) loadPersistentSettings(ctx context.Context) (PersistentSettings, error) {
 	output, err := m.outputPlatformScript(ctx, windowsPersistentStatusScript(), darwinPersistentStatusScript(), linuxPersistentStatusScript())
 	if err != nil {
 		return PersistentSettings{}, err
 	}
-	settings := parsePersistentSettings(output)
-	if strings.TrimSpace(output) != "" {
-		report.addOutput(LevelInfo, output)
-	}
-	return settings, nil
+	return parsePersistentSettings(output), nil
 }
 
 func (m NetworkManager) outputPlatformScript(ctx context.Context, windowsScript, darwinScript, linuxScript string) (string, error) {
