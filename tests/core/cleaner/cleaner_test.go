@@ -367,9 +367,34 @@ func (jitterFileSystem) EvalSymlinks(path string) (string, error) {
 
 func (jitterFileSystem) Glob(pattern string) ([]string, error) { return filepath.Glob(pattern) }
 
+func TestRunCanceledDuringForceStopIsNotAnError(t *testing.T) {
+	fakeHome(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	commands := newFakeProcessCommandRunner()
+	commands.onKill = func() error {
+		cancel()
+		return errors.New("signal: killed")
+	}
+
+	report, err := cleaner.NewCleaner(nil, commands).Run(ctx, cleaner.Options{ForceStopProcesses: true})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if report.Errors != 0 {
+		t.Fatalf("expected a canceled force stop not to count as an error: %#v", report.Entries)
+	}
+	for _, entry := range report.Entries {
+		if entry.Level == cleaner.LevelError {
+			t.Fatalf("expected no ERROR entry after cancel, got %q", entry.Message)
+		}
+	}
+}
+
 type fakeProcessCommandRunner struct {
 	killCommands [][]string
 	onFirstCall  func()
+	onKill       func() error
 }
 
 func (r *fakeProcessCommandRunner) noteCall() {
@@ -402,6 +427,9 @@ func (r *fakeProcessCommandRunner) Run(_ context.Context, name string, args ...s
 		return errors.New("process not found")
 	case "pkill", "taskkill":
 		r.killCommands = append(r.killCommands, command)
+		if r.onKill != nil {
+			return r.onKill()
+		}
 		return nil
 	default:
 		return nil

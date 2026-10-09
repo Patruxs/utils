@@ -265,13 +265,8 @@ func (m NetworkManager) CurrentConfig(ctx context.Context) (Report, error) {
 
 	output, err := m.outputPlatformScript(ctx, windowsCurrentConfigScript(), darwinCurrentConfigScript(), linuxCurrentConfigScript())
 	report.addOutput(LevelInfo, output)
-	if err != nil {
-		report.add(LevelError, "Network inspection failed: %v", err)
-		return report, err
-	}
-
-	report.add(LevelSuccess, "Network inspection completed.")
-	return report, nil
+	err = report.finish(ctx, err, "Network inspection completed.")
+	return report, err
 }
 
 func (m NetworkManager) Diagnostics(ctx context.Context) (Report, error) {
@@ -281,13 +276,8 @@ func (m NetworkManager) Diagnostics(ctx context.Context) (Report, error) {
 
 	output, err := m.outputPlatformScript(ctx, windowsDiagnosticsScript(), darwinDiagnosticsScript(), linuxDiagnosticsScript())
 	report.addOutput(LevelInfo, output)
-	if err != nil {
-		report.add(LevelError, "Network diagnostics failed: %v", err)
-		return report, err
-	}
-
-	report.add(LevelSuccess, "Network diagnostics completed.")
-	return report, nil
+	err = report.finish(ctx, err, "Network diagnostics completed.")
+	return report, err
 }
 
 func (m NetworkManager) SetDNS(ctx context.Context, opts ConfigOptions) (Report, error) {
@@ -295,7 +285,7 @@ func (m NetworkManager) SetDNS(ctx context.Context, opts ConfigOptions) (Report,
 	opts = normalizeConfigOptions(opts)
 	report := Report{Operation: fmt.Sprintf("Set %s DNS", opts.DNSName)}
 	if err := validateConfigOptions(opts); err != nil {
-		report.finish(err, "")
+		err = report.finish(ctx, err, "")
 		return report, err
 	}
 	report.add(LevelInfo, "Applying %s DNS (%s, %s).", opts.DNSName, opts.DNSPrimary, opts.DNSSecondary)
@@ -306,7 +296,7 @@ func (m NetworkManager) SetDNS(ctx context.Context, opts ConfigOptions) (Report,
 		err = m.savePersistentSettings(ctx, &report, opts)
 	}
 
-	report.finish(err, fmt.Sprintf("%s DNS applied.", opts.DNSName))
+	err = report.finish(ctx, err, fmt.Sprintf("%s DNS applied.", opts.DNSName))
 	return report, err
 }
 
@@ -315,7 +305,7 @@ func (m NetworkManager) ApplyConfig(ctx context.Context, opts ConfigOptions) (Re
 	opts = normalizeConfigOptions(opts)
 	report := Report{Operation: "Apply Network Config"}
 	if err := validateConfigOptions(opts); err != nil {
-		report.finish(err, "")
+		err = report.finish(ctx, err, "")
 		return report, err
 	}
 	report.add(LevelInfo, "Applying %s DNS (%s, %s), DoH=%t, MTU=%d.", opts.DNSName, opts.DNSPrimary, opts.DNSSecondary, opts.EnableDoH, opts.MTU)
@@ -332,7 +322,7 @@ func (m NetworkManager) ApplyConfig(ctx context.Context, opts ConfigOptions) (Re
 		err = m.applyMTU(ctx, &report, opts.MTU)
 	}
 
-	report.finish(err, "Network configuration applied. Restart may be required for full effect.")
+	err = report.finish(ctx, err, "Network configuration applied. Restart may be required for full effect.")
 	return report, err
 }
 
@@ -340,7 +330,7 @@ func (m NetworkManager) FlushDNSCache(ctx context.Context) (Report, error) {
 	m = m.withDefaults()
 	report := Report{Operation: "Flush DNS Cache"}
 	err := m.flushDNS(ctx, &report)
-	report.finish(err, "DNS cache flushed.")
+	err = report.finish(ctx, err, "DNS cache flushed.")
 	return report, err
 }
 
@@ -348,7 +338,7 @@ func (m NetworkManager) EnableDoH(ctx context.Context) (Report, error) {
 	m = m.withDefaults()
 	report := Report{Operation: "Enable DNS over HTTPS"}
 	err := m.enableDoH(ctx, &report)
-	report.finish(err, "DNS over HTTPS templates registered.")
+	err = report.finish(ctx, err, "DNS over HTTPS templates registered.")
 	return report, err
 }
 
@@ -356,7 +346,7 @@ func (m NetworkManager) DisableDoH(ctx context.Context) (Report, error) {
 	m = m.withDefaults()
 	report := Report{Operation: "Disable DNS over HTTPS"}
 	err := m.disableDoH(ctx, &report)
-	report.finish(err, "DNS over HTTPS templates removed.")
+	err = report.finish(ctx, err, "DNS over HTTPS templates removed.")
 	return report, err
 }
 
@@ -367,7 +357,7 @@ func (m NetworkManager) OptimizeNetworkSettings(ctx context.Context) (Report, er
 		report.add(LevelWarn, "Windows-specific TCP knobs from tool.ps1 are not available on %s; applying MTU and available TCP equivalents where the OS supports them.", runtime.GOOS)
 	}
 	err := m.runPrivileged(ctx, &report, "network optimization", windowsOptimizeNetworkScript(), darwinOptimizeNetworkScript(), linuxOptimizeNetworkScript())
-	report.finish(err, "Network optimization applied. Restart may be required for full effect.")
+	err = report.finish(ctx, err, "Network optimization applied. Restart may be required for full effect.")
 	return report, err
 }
 
@@ -378,7 +368,7 @@ func (m NetworkManager) ResetNetworkOptimizations(ctx context.Context) (Report, 
 		report.add(LevelWarn, "Winsock/TCP reset is Windows-specific; applying best-effort reset commands available on %s.", runtime.GOOS)
 	}
 	err := m.runPrivileged(ctx, &report, "network optimization reset", windowsResetNetworkOptimizationsScript(), darwinResetNetworkOptimizationsScript(), linuxResetNetworkOptimizationsScript())
-	report.finish(err, "Network optimizations reset. Restart may be required.")
+	err = report.finish(ctx, err, "Network optimizations reset. Restart may be required.")
 	return report, err
 }
 
@@ -386,7 +376,7 @@ func (m NetworkManager) ResetDNS(ctx context.Context) (Report, error) {
 	m = m.withDefaults()
 	report := Report{Operation: "Reset DNS to Automatic"}
 	err := m.resetDNS(ctx, &report)
-	report.finish(err, "DNS reset to automatic.")
+	err = report.finish(ctx, err, "DNS reset to automatic.")
 	return report, err
 }
 
@@ -401,7 +391,7 @@ func (m NetworkManager) ResetToDefaults(ctx context.Context) (Report, error) {
 	if err == nil {
 		err = m.clearPersistentSettings(ctx, &report)
 	}
-	report.finish(err, "Network settings reset to defaults.")
+	err = report.finish(ctx, err, "Network settings reset to defaults.")
 	return report, err
 }
 
@@ -416,7 +406,7 @@ func (m NetworkManager) ClearBrowserCache(ctx context.Context, mode BrowserMode)
 	if err != nil {
 		err = commandError(output, err)
 	}
-	report.finish(err, "Browser cache cleanup completed.")
+	err = report.finish(ctx, err, "Browser cache cleanup completed.")
 	return report, err
 }
 
@@ -427,6 +417,9 @@ func (m NetworkManager) EditHosts(ctx context.Context, opts HostsOptions) (Repor
 		report.add(LevelInfo, "Viewing hosts file with standard user permissions.")
 		output, err := m.outputPlatformScript(ctx, windowsViewHostsScript(), darwinViewHostsScript(), linuxViewHostsScript())
 		report.addOutput(LevelInfo, output)
+		if wasCanceled(ctx, err) {
+			return report, report.addCanceled(ctx)
+		}
 		if err != nil {
 			report.add(LevelWarn, "Could not read hosts file: %v", err)
 		}
@@ -442,13 +435,13 @@ func (m NetworkManager) EditHosts(ctx context.Context, opts HostsOptions) (Repor
 
 	windowsScript, darwinScript, linuxScript, label, err := hostsScripts(opts, m.now().Format(backupStampLayout))
 	if err != nil {
-		report.finish(err, "")
+		err = report.finish(ctx, err, "")
 		return report, err
 	}
 
 	report.add(LevelInfo, "Attempting hosts operation: %s.", label)
 	err = m.runPrivileged(ctx, &report, label, windowsScript, darwinScript, linuxScript)
-	report.finish(err, fmt.Sprintf("Hosts operation completed: %s.", label))
+	err = report.finish(ctx, err, fmt.Sprintf("Hosts operation completed: %s.", label))
 	return report, err
 }
 
@@ -456,6 +449,9 @@ func (m NetworkManager) PersistentStatus(ctx context.Context) (Report, error) {
 	m = m.withDefaults()
 	report := Report{Operation: "Persistent DNS Settings"}
 	settings, err := m.loadPersistentSettings(ctx, &report)
+	if wasCanceled(ctx, err) {
+		return report, report.addCanceled(ctx)
+	}
 	if err != nil {
 		report.add(LevelWarn, "Could not read persistent settings: %v", err)
 		return report, nil
@@ -476,7 +472,7 @@ func (m NetworkManager) SetPersistentMode(ctx context.Context, enabled bool, opt
 	report := Report{Operation: "Toggle Persistent DNS Mode"}
 	if !enabled {
 		err := m.clearPersistentSettings(ctx, &report)
-		report.finish(err, "Persistent DNS mode disabled.")
+		err = report.finish(ctx, err, "Persistent DNS mode disabled.")
 		return report, err
 	}
 
@@ -484,7 +480,7 @@ func (m NetworkManager) SetPersistentMode(ctx context.Context, enabled bool, opt
 	if err == nil {
 		err = m.savePersistentSettings(ctx, &report, opts)
 	}
-	report.finish(err, fmt.Sprintf("Persistent DNS mode enabled with %s (%s, %s). DNS preset actions can update this saved value.", opts.DNSName, opts.DNSPrimary, opts.DNSSecondary))
+	err = report.finish(ctx, err, fmt.Sprintf("Persistent DNS mode enabled with %s (%s, %s). DNS preset actions can update this saved value.", opts.DNSName, opts.DNSPrimary, opts.DNSSecondary))
 	return report, err
 }
 
@@ -494,12 +490,12 @@ func (m NetworkManager) ApplyPersistentSettings(ctx context.Context) (Report, er
 	settings, err := m.loadPersistentSettings(ctx, &report)
 	if err != nil {
 		err = fmt.Errorf("could not load persistent settings: %w", err)
-		report.finish(err, "")
+		err = report.finish(ctx, err, "")
 		return report, err
 	}
 	if !settings.Enabled || settings.DNSPrimary == "" || settings.DNSSecondary == "" {
 		err = errors.New("no persistent DNS settings are saved")
-		report.finish(err, "")
+		err = report.finish(ctx, err, "")
 		return report, err
 	}
 
@@ -511,11 +507,11 @@ func (m NetworkManager) ApplyPersistentSettings(ctx context.Context) (Report, er
 	}
 	if err := validateConfigOptions(opts); err != nil {
 		err = fmt.Errorf("saved persistent DNS settings were rejected: %w", err)
-		report.finish(err, "")
+		err = report.finish(ctx, err, "")
 		return report, err
 	}
 	err = m.applyDNS(ctx, &report, opts)
-	report.finish(err, fmt.Sprintf("Persistent %s DNS applied.", opts.DNSName))
+	err = report.finish(ctx, err, fmt.Sprintf("Persistent %s DNS applied.", opts.DNSName))
 	return report, err
 }
 
@@ -523,7 +519,7 @@ func (m NetworkManager) ClearPersistentSettings(ctx context.Context) (Report, er
 	m = m.withDefaults()
 	report := Report{Operation: "Clear Persistent DNS Settings"}
 	err := m.clearPersistentSettings(ctx, &report)
-	report.finish(err, "Persistent DNS settings cleared.")
+	err = report.finish(ctx, err, "Persistent DNS settings cleared.")
 	return report, err
 }
 
@@ -862,12 +858,25 @@ func (r *Report) add(level Level, format string, args ...any) {
 	})
 }
 
-func (r *Report) finish(err error, successMessage string) {
+func (r *Report) finish(ctx context.Context, err error, successMessage string) error {
+	if wasCanceled(ctx, err) {
+		return r.addCanceled(ctx)
+	}
 	if err != nil {
 		r.add(LevelError, "%s failed: %v", r.Operation, err)
-		return
+		return err
 	}
 	r.add(LevelSuccess, "%s", successMessage)
+	return nil
+}
+
+func (r *Report) addCanceled(ctx context.Context) error {
+	r.add(LevelWarn, "%s canceled before it finished.", r.Operation)
+	return ctx.Err()
+}
+
+func wasCanceled(ctx context.Context, err error) bool {
+	return err != nil && errors.Is(ctx.Err(), context.Canceled)
 }
 
 func (r *Report) addOutput(level Level, output string) {

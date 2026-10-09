@@ -971,8 +971,10 @@ func runNetworkActions(ctx context.Context, manager corenetwork.NetworkManager, 
 		combined.Warnings += actionReport.Warnings
 		combined.Errors += actionReport.Errors
 		if err != nil {
-			combined.Errors++
 			runErrors = append(runErrors, err)
+		}
+		if err != nil && !errors.Is(err, context.Canceled) {
+			combined.Errors++
 			combined.Entries = append(combined.Entries, corenetwork.Entry{
 				Time:    time.Now(),
 				Level:   corenetwork.LevelError,

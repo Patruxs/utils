@@ -556,6 +556,9 @@ func (c Cleaner) handleTargetProcesses(ctx context.Context, report *Report, forc
 			break
 		}
 		if err := c.stopProcess(ctx, name); err != nil {
+			if ctx.Err() != nil {
+				break
+			}
 			report.add(LevelError, "Could not force stop target process %s: %v", name, err)
 			runErrors = append(runErrors, fmt.Errorf("force stop target process %q: %w", name, err))
 			continue
@@ -618,6 +621,9 @@ func parseTasklistCSV(output string) []string {
 func (c Cleaner) cleanCredentialManager(ctx context.Context, report *Report, execute bool) error {
 	out, err := c.commands.Output(ctx, commandCmdkey, commandArgCmdkeyList)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
 		report.add(LevelError, "Could not list Windows Credential Manager entries: %v", err)
 		return fmt.Errorf("list Windows Credential Manager entries: %w", err)
 	}
@@ -637,6 +643,9 @@ func (c Cleaner) cleanCredentialManager(ctx context.Context, report *Report, exe
 		}
 
 		if err := c.commands.Run(ctx, commandCmdkey, commandArgCmdkeyDelete+target); err != nil {
+			if ctx.Err() != nil {
+				break
+			}
 			report.add(LevelError, "Could not delete Windows Credential Manager entry %s: %v", target, err)
 			runErrors = append(runErrors, fmt.Errorf("delete Windows Credential Manager entry %q: %w", target, err))
 			continue

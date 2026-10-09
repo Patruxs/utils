@@ -44,6 +44,29 @@ func TestFailedElevationEndsWithErrorAndCommandOutput(t *testing.T) {
 	}
 }
 
+func TestCanceledOperationIsReportedAsCanceledNotFailed(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := &fakeCommandRunner{output: func(string, []string) ([]byte, error) {
+		cancel()
+		return []byte("=== Network Diagnostics ===\n"), errors.New("signal: killed")
+	}}
+
+	report, err := NewNetworkManager(runner).Diagnostics(ctx)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+	if report.Errors != 0 {
+		t.Fatalf("expected a canceled run not to count as an error: %+v", report.Entries)
+	}
+	for _, entry := range report.Entries {
+		if entry.Level == LevelError {
+			t.Fatalf("expected no ERROR entry after cancel, got %q", entry.Message)
+		}
+	}
+}
+
 func TestSavedDNSWithInjectionIsRejectedBeforeAnyWrite(t *testing.T) {
 	saved := "PersistentMode=True\nDNSPrimary=1.1.1.1\"); Start-Process calc; (\"\nDNSSecondary=1.0.0.1\nDNSName=Cloudflare\n"
 	runner := &fakeCommandRunner{output: func(string, []string) ([]byte, error) {
