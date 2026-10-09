@@ -65,13 +65,11 @@ const (
 	logSectionSkipped  = "skipped"
 	logSectionNotes    = "notes"
 
-	cleanerShortTitle           = "Cleaner"
-	cleanerShortTitleMaxWidth   = 60
-	cleanerTwoColumnMinWidth    = 100
-	cleanerOptionsPanelMinWidth = 66
-	cleanerShortDetailLines     = 2
-	cleanerActivityMinHeight    = 3
-	cleanerDefaultBodyHeight    = 21
+	cleanerShortTitle         = "Cleaner"
+	cleanerShortTitleMaxWidth = 60
+	cleanerShortDetailLines   = 2
+	cleanerActivityMinHeight  = 3
+	cleanerDefaultBodyHeight  = 21
 )
 
 type cleanerKeyMap struct {
@@ -607,15 +605,14 @@ func (m CleanerModel) renderOptions(width, height int, fit optionsFit) string {
 		blocks = append(blocks, common.RenderWrapped(width, cleanerSubtitle, common.Muted.Render), "")
 	}
 
-	if width >= cleanerTwoColumnMinWidth && fit < fitDialogOnly {
-		leftWidth := common.MaxInt(width*45/100, cleanerOptionsPanelMinWidth)
-		rightWidth := width - leftWidth - 1
-		left := m.renderOptionsPanel(leftWidth, 0)
+	if columns := common.SplitColumns(width); columns.TwoColumns && fit < fitDialogOnly {
+		rightWidth := columns.Right
+		left := m.renderOptionsPanel(columns.Left, 0)
 		right := []string{m.renderActionPanel(rightWidth, fit)}
 		if fit < fitWithoutNotes {
 			right = append(right, common.Panel{Title: "Always", Width: rightWidth}.Render(m.renderNotes(rightWidth-4)))
 		}
-		blocks = append(blocks, lipgloss.JoinHorizontal(lipgloss.Top, left, " ", lipgloss.JoinVertical(lipgloss.Left, right...)))
+		blocks = append(blocks, lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", common.ColumnGap), lipgloss.JoinVertical(lipgloss.Left, right...)))
 		return strings.Join(blocks, "\n")
 	}
 
@@ -820,8 +817,8 @@ func cleanerCounts(report cleaner.Report, execute bool) []common.Count {
 	return []common.Count{
 		removals,
 		{Label: "skipped", N: report.Skipped, Tone: common.ToneSubtle},
-		{Label: "warnings", N: report.Warnings, Tone: common.ToneWarning},
-		{Label: "errors", N: report.Errors, Tone: common.ToneDanger},
+		{Label: "warnings", Singular: "warning", N: report.Warnings, Tone: common.ToneWarning},
+		{Label: "errors", Singular: "error", N: report.Errors, Tone: common.ToneDanger},
 	}
 }
 
