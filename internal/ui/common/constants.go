@@ -8,6 +8,4 @@ const (
 	AppPaddingY          = 1
 	AppHorizontalPadding = AppPaddingX * 2
 	AppVerticalPadding   = AppPaddingY * 2
-
-	ColorPrimary = "#7AA2F7"
 )
