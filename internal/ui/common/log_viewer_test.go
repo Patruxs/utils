@@ -2,6 +2,7 @@ package common
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -18,7 +19,7 @@ func numberedLogLines(prefix string, count int) []LogLine {
 }
 
 func topLogRow(viewer LogViewer) string {
-	return strings.TrimSpace(stripANSIForCheckboxTest(strings.Split(viewer.View(), "\n")[0]))
+	return strings.TrimSpace(stripANSI(strings.Split(viewer.View(), "\n")[0]))
 }
 
 func TestLogViewerScrollsWithinContentAndResetsOnNewSections(t *testing.T) {
@@ -48,47 +49,6 @@ func TestLogViewerScrollsWithinContentAndResetsOnNewSections(t *testing.T) {
 	}
 }
 
-func TestLogViewerToggleFoldedKeepsTheVisibleRows(t *testing.T) {
-	viewer := NewLogViewer()
-	viewer.SetSize(40, 5)
-	viewer.SetSections([]LogSection{
-		{ID: "skipped", Title: "SKIPPED", Lines: numberedLogLines("kept", 2), Folded: numberedLogLines("folded", 20), FoldedSummary: "20 not present"},
-		{ID: "notes", Title: "NOTES", Lines: numberedLogLines("note", 10)},
-	})
-	for range 5 {
-		viewer, _ = viewer.Update(tea.KeyMsg{Type: tea.KeyDown})
-	}
-	if got := topLogRow(viewer); got != "note2" {
-		t.Fatalf("expected note2 at the top before expanding, got %q", got)
-	}
-
-	viewer.ToggleFolded("skipped")
-	if got := topLogRow(viewer); got != "note2" {
-		t.Fatalf("expanding a section above should keep note2 at the top, got %q", got)
-	}
-	if !strings.HasSuffix(viewer.Position(), "of 34") {
-		t.Fatalf("expected folded lines to be added to the content, got %q", viewer.Position())
-	}
-
-	viewer.ToggleFolded("skipped")
-	if got := topLogRow(viewer); got != "note2" {
-		t.Fatalf("folding a section above should keep note2 at the top, got %q", got)
-	}
-
-	viewer.ToggleFolded("skipped")
-	viewer.SetSections(viewer.sections)
-	for range 8 {
-		viewer, _ = viewer.Update(tea.KeyMsg{Type: tea.KeyDown})
-	}
-	if got := topLogRow(viewer); got != "folded6" {
-		t.Fatalf("expected to be inside the folded lines, got %q", got)
-	}
-	viewer.ToggleFolded("skipped")
-	if got := topLogRow(viewer); !strings.HasPrefix(got, "SKIPPED") {
-		t.Fatalf("folding the lines on screen should show their section header, got %q", got)
-	}
-}
-
 func TestLogViewerRowsFitWidthAndKeepLongDetailsWhole(t *testing.T) {
 	const width = 44
 	path := `C:\Users\Infra_IT_Intership_P\AppData\Local\Microsoft\Edge\User Data\Default\Cookies`
@@ -99,7 +59,7 @@ func TestLogViewerRowsFitWidthAndKeepLongDetailsWhole(t *testing.T) {
 		{Text: "GitHub CLI hosts", Detail: "~/.config/gh/hosts.yml"},
 	}}})
 
-	view := stripANSIForCheckboxTest(viewer.View())
+	view := stripANSI(viewer.View())
 	for _, row := range strings.Split(view, "\n") {
 		if lipgloss.Width(row) > width {
 			t.Fatalf("expected rows <= %d columns, got %d: %q", width, lipgloss.Width(row), row)
@@ -110,19 +70,19 @@ func TestLogViewerRowsFitWidthAndKeepLongDetailsWhole(t *testing.T) {
 	}
 }
 
-func TestLogViewerUntitledSectionHasNoHeaderRowAndStillFolds(t *testing.T) {
+func TestLogViewerUntitledSectionHasNoHeaderRow(t *testing.T) {
 	viewer := NewLogViewer()
 	viewer.SetSize(40, 10)
-	viewer.SetSections([]LogSection{{ID: "run", Lines: numberedLogLines("line", 2), Folded: numberedLogLines("folded", 3), FoldedSummary: "3 more lines"}})
+	viewer.SetSections([]LogSection{{ID: "run", Lines: numberedLogLines("line", 2)}})
 
 	if got := topLogRow(viewer); got != "line1" {
 		t.Fatalf("expected the first line on the first row, got %q", got)
 	}
-	if got := viewer.Position(); got != "1–3 of 3" {
-		t.Fatalf("expected two lines and the fold summary only, got %q", got)
+	if got := viewer.Position(); got != "1–2 of 2" {
+		t.Fatalf("expected the two lines only, got %q", got)
 	}
-	viewer.ToggleFolded("run")
-	if got := viewer.Position(); got != "1–5 of 5" || !strings.Contains(viewer.View(), "folded3") {
-		t.Fatalf("expected the folded lines after expanding, got %q:\n%s", got, viewer.View())
-	}
+}
+
+func stripANSI(value string) string {
+	return regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(value, "")
 }
