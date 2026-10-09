@@ -82,6 +82,11 @@ func TestNetworkBatchResultListsProblemsFirstThenEachActionInOrder(t *testing.T)
 			t.Fatalf("expected section %d to be %q, got %q", index+1, actionTitle(action), sections[index+1].Title)
 		}
 	}
+
+	single := networkLogSections([]networkActionResult{{action: networkActionViewConfig, report: corenetwork.Report{Entries: []corenetwork.Entry{{Level: corenetwork.LevelInfo, Message: "dns 1.1.1.1"}}}}})
+	if len(single) != 1 || single[0].Title != "" {
+		t.Fatalf("expected a single action without problems to have one untitled section, got %+v", single)
+	}
 }
 
 func TestNetworkHostsFormKeepsAnInvalidEntryInTheForm(t *testing.T) {

@@ -149,8 +149,8 @@ const (
 	networkCanceledRun = "Canceled; nothing was changed."
 	networkDefaultIP   = "127.0.0.1"
 
-	networkWideMinWidth       = 100
 	networkDialogMaxWidth     = 100
+	networkSectionGlyph       = "◆"
 	networkNarrowCrumbWidth   = 60
 	networkListMinRows        = 3
 	networkDetailMaxRows      = 4
@@ -462,17 +462,17 @@ func (m *NetworkModel) layoutComponents() {
 }
 
 func (m NetworkModel) actionsView(width, height int) string {
-	listWidth, _ := m.actionListSize(width, height)
-	actions := common.Panel{Title: "Actions", Meta: m.listPosition(), Variant: common.PanelFocused, Width: listWidth + 4}.Render(m.actions.View())
-	if width >= networkWideMinWidth {
-		rightWidth := width - listWidth - 4 - 1
+	split := common.SplitColumns(width)
+	actions := common.Panel{Title: "Actions", Meta: m.listPosition(), Variant: common.PanelFocused, Width: split.Left}.Render(m.actions.View())
+	if split.TwoColumns {
+		rightWidth := split.Right
 		detail := common.Panel{Title: m.currentAction().title, Width: rightWidth}.Render(strings.Join(m.actionDetailLines(rightWidth-4), "\n"))
 		session := common.Panel{Title: "Session", Width: rightWidth}.Render(strings.Join(m.sessionLines(rightWidth-4), "\n"))
 		right := detail
 		if lipgloss.Height(detail)+lipgloss.Height(session) <= height {
 			right += "\n" + session
 		}
-		return lipgloss.JoinHorizontal(lipgloss.Top, actions, " ", right)
+		return lipgloss.JoinHorizontal(lipgloss.Top, actions, strings.Repeat(" ", common.ColumnGap), right)
 	}
 
 	detailRows, sessionRows := m.narrowDetailRows(width, height)
@@ -486,8 +486,8 @@ func (m NetworkModel) actionsView(width, height int) string {
 }
 
 func (m NetworkModel) actionListSize(width, height int) (int, int) {
-	if width >= networkWideMinWidth {
-		return width*45/100 - 4, common.MaxInt(networkListMinRows, height-2)
+	if split := common.SplitColumns(width); split.TwoColumns {
+		return split.Left - 4, common.MaxInt(networkListMinRows, height-2)
 	}
 	detailRows, sessionRows := m.narrowDetailRows(width, height)
 	return width - 4, common.MaxInt(networkListMinRows, height-(detailRows+2)-sessionRows-2)
@@ -612,8 +612,8 @@ func (m NetworkModel) resultSummary(width int) string {
 
 	warnings, errorCount := networkProblemCounts(m.results)
 	counts := common.RenderCounts(width, []common.Count{
-		{Label: "warnings", N: warnings, Tone: common.ToneWarning},
-		{Label: "errors", N: errorCount, Tone: common.ToneDanger},
+		{Label: "warnings", Singular: "warning", N: warnings, Tone: common.ToneWarning},
+		{Label: "errors", Singular: "error", N: errorCount, Tone: common.ToneDanger},
 	})
 	if lipgloss.Width(summary)+3+lipgloss.Width(counts) <= width {
 		return summary + common.Muted.Render(" · ") + counts
@@ -1061,6 +1061,7 @@ func networkLogSections(results []networkActionResult) []common.LogSection {
 		section := common.LogSection{
 			ID:    fmt.Sprintf("action-%d", index),
 			Title: actionTitle(result.action),
+			Glyph: networkSectionGlyph,
 			Tone:  common.ToneAccent,
 		}
 		if len(results) > 1 {
@@ -1078,6 +1079,9 @@ func networkLogSections(results []networkActionResult) []common.LogSection {
 		sections = append(sections, section)
 	}
 	if len(problems) == 0 {
+		if len(sections) == 1 {
+			sections[0].Title = ""
+		}
 		return sections
 	}
 
