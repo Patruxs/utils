@@ -36,6 +36,7 @@ type Options struct {
 	CleanCredentialManager bool
 	ForceStopProcesses     bool
 	LogPath                string
+	Progress               func(Progress)
 }
 
 type Entry struct {
@@ -91,19 +92,9 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 func (c Cleaner) Run(ctx context.Context, opts Options) (Report, error) {
 	c = c.withDefaults()
 
-	home, err := c.fs.UserHomeDir()
+	home, realHome, err := c.resolveHome()
 	if err != nil {
-		return Report{}, fmt.Errorf("detect user home: %w", err)
-	}
-
-	home, err = filepath.Abs(home)
-	if err != nil {
-		return Report{}, fmt.Errorf("resolve user home: %w", err)
-	}
-
-	realHome, err := c.fs.EvalSymlinks(home)
-	if err != nil {
-		return Report{}, fmt.Errorf("resolve user home: %w", err)
+		return Report{}, err
 	}
 
 	logPath, err := c.resolveLogPath(opts.LogPath, home)
@@ -124,20 +115,40 @@ func (c Cleaner) Run(ctx context.Context, opts Options) (Report, error) {
 	}
 
 	var runErrors []error
-	clean := func(targets []targetPath) {
-		if err := c.cleanTargets(ctx, &report, realHome, targets, opts.Execute); err != nil {
-			runErrors = append(runErrors, err)
-		}
-	}
-
 	stopRun := func(err error) (Report, error) {
 		report.add(LevelWarn, "Cleanup stopped before finishing: %v. Remaining targets were not checked.", err)
 		return c.finishRun(report, append(runErrors, err))
 	}
 
+	var enabled []GroupID
+	for _, id := range planGroupOrder {
+		if id == GroupForceStop || opts.Enabled(id) {
+			enabled = append(enabled, id)
+		}
+	}
+	scan := c.scan(ctx, home, realHome, enabled)
+	if err := ctx.Err(); err != nil {
+		return stopRun(err)
+	}
+
+	progress := newProgressTracker(opts.Progress, scan.attempts(opts))
+	clean := func(id GroupID) {
+		if err := c.cleanTargets(ctx, &report, realHome, scan.group(id), opts.Execute, progress); err != nil {
+			runErrors = append(runErrors, err)
+		}
+	}
+
 	stages := []func(){
 		func() {
-			if err := c.handleTargetProcesses(ctx, &report, opts.ForceStopProcesses); err != nil {
+			processes := scan.group(GroupForceStop)
+			if processes.err != nil {
+				report.add(LevelWarn, "Could not handle running target processes: %v", processes.err)
+				if opts.ForceStopProcesses {
+					runErrors = append(runErrors, processes.err)
+				}
+				return
+			}
+			if err := c.handleTargetProcesses(ctx, &report, processes.processes, opts.ForceStopProcesses, progress); err != nil {
 				report.add(LevelWarn, "Could not handle running target processes: %v", err)
 				if opts.ForceStopProcesses {
 					runErrors = append(runErrors, err)
@@ -145,7 +156,7 @@ func (c Cleaner) Run(ctx context.Context, opts Options) (Report, error) {
 			}
 		},
 		func() {
-			clean(developerCredentialTargets(home, c.fs))
+			clean(GroupCredentials)
 		},
 		func() {
 			if !opts.FullToolReset {
@@ -153,7 +164,7 @@ func (c Cleaner) Run(ctx context.Context, opts Options) (Report, error) {
 				return
 			}
 			report.add(LevelWarn, "Full tool reset is enabled. This removes whole tool folders, including installed runtimes, VMs, IDE data, and AI tool data.")
-			clean(fullToolResetTargets(home, c.fs))
+			clean(GroupFullToolReset)
 		},
 		func() {
 			if !opts.CleanSSHKeys {
@@ -161,7 +172,7 @@ func (c Cleaner) Run(ctx context.Context, opts Options) (Report, error) {
 				return
 			}
 			report.add(LevelWarn, "SSH key cleanup is enabled. This removes local private and public keys.")
-			clean(sshTargets(home, c.fs))
+			clean(GroupSSHKeys)
 		},
 		func() {
 			if !opts.CleanShellHistory {
@@ -169,7 +180,7 @@ func (c Cleaner) Run(ctx context.Context, opts Options) (Report, error) {
 				return
 			}
 			report.add(LevelWarn, "History cleanup is enabled. This removes shell, REPL, database, and debugger histories.")
-			clean(historyTargets(home, c.fs))
+			clean(GroupShellHistory)
 		},
 		func() {
 			if !opts.IncludeBrowserProfiles {
@@ -177,20 +188,19 @@ func (c Cleaner) Run(ctx context.Context, opts Options) (Report, error) {
 				return
 			}
 			report.add(LevelWarn, "Browser profile cleanup is enabled. This removes browser caches, local sign-ins, and profile data.")
-			clean(browserCacheTargets(home, c.fs))
-			clean(browserProfileTargets(home, c.fs))
+			clean(GroupBrowserProfiles)
 		},
 		func() {
 			if !opts.CleanCredentialManager {
 				report.add(LevelInfo, "Windows Credential Manager was not changed. Enable Credential Manager cleanup to review or delete matching dev credentials.")
 				return
 			}
-			if runtime.GOOS != osWindows {
+			if !GroupAvailable(GroupCredentialManager) {
 				report.add(LevelSkip, "Windows Credential Manager cleanup is only available on Windows.")
 				return
 			}
 			report.add(LevelInfo, "Windows Credential Manager cleanup is enabled with a conservative allowlist.")
-			if err := c.cleanCredentialManager(ctx, &report, opts.Execute); err != nil {
+			if err := c.cleanCredentialManager(ctx, &report, scan.group(GroupCredentialManager), opts.Execute, progress); err != nil {
 				runErrors = append(runErrors, err)
 			}
 		},
@@ -413,13 +423,7 @@ func (c Cleaner) cleanPath(ctx context.Context, report *Report, home string, pat
 }
 
 func (c Cleaner) removeSymlink(report *Report, root *os.Root, rel string, path string, label string, execute bool) error {
-	target, err := c.fs.EvalSymlinks(path)
-	if err != nil {
-		target, err = root.Readlink(rel)
-	}
-	if err != nil {
-		target = "unknown"
-	}
+	target := c.symlinkTarget(root, rel, path)
 
 	if !execute {
 		report.addSymlinkRemoval(LevelDryRun, label, path, target, "Would remove symlink for %s: %s, target %s kept", label, path, target)
@@ -455,14 +459,17 @@ func pathInsideHome(home string, path string) (string, bool) {
 	return rel, true
 }
 
-func (c Cleaner) cleanTargets(ctx context.Context, report *Report, home string, targets []targetPath, execute bool) error {
-	results := make([]Report, len(targets))
-	runErrors := make([]error, len(targets))
+func (c Cleaner) cleanTargets(ctx context.Context, report *Report, home string, group groupScan, execute bool, progress *progressTracker) error {
+	results := make([]Report, len(group.targets))
+	runErrors := make([]error, len(group.targets))
 
 	var wg sync.WaitGroup
-	for i, target := range targets {
+	for i, target := range group.targets {
 		wg.Go(func() {
 			runErrors[i] = c.cleanPath(ctx, &results[i], home, target.path, target.label, execute)
+			if group.found[i].attempted() && len(results[i].Entries) > 0 {
+				progress.step(results[i].Entries[len(results[i].Entries)-1])
+			}
 		})
 	}
 	wg.Wait()
@@ -524,10 +531,10 @@ func slogLevel(level Level) slog.Level {
 	}
 }
 
-func (c Cleaner) handleTargetProcesses(ctx context.Context, report *Report, forceStop bool) error {
+func (c Cleaner) runningTargetProcesses(ctx context.Context) ([]string, error) {
 	names, err := c.runningProcessNames(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	targetNames := map[string]struct{}{
@@ -563,7 +570,10 @@ func (c Cleaner) handleTargetProcesses(ctx context.Context, report *Report, forc
 		seen[key] = struct{}{}
 		running = append(running, name)
 	}
+	return running, nil
+}
 
+func (c Cleaner) handleTargetProcesses(ctx context.Context, report *Report, running []string, forceStop bool, progress *progressTracker) error {
 	if len(running) == 0 {
 		return nil
 	}
@@ -584,10 +594,12 @@ func (c Cleaner) handleTargetProcesses(ctx context.Context, report *Report, forc
 			}
 			report.add(LevelError, "Could not force stop target process %s: %v", name, err)
 			runErrors = append(runErrors, fmt.Errorf("force stop target process %q: %w", name, err))
+			progress.step(report.Entries[len(report.Entries)-1])
 			continue
 		}
 
 		report.add(LevelWarn, "Force stopped target process: %s", name)
+		progress.step(report.Entries[len(report.Entries)-1])
 	}
 
 	return errors.Join(runErrors...)
@@ -641,27 +653,39 @@ func parseTasklistCSV(output string) []string {
 	return names
 }
 
-func (c Cleaner) cleanCredentialManager(ctx context.Context, report *Report, execute bool) error {
+func (c Cleaner) listCredentialManagerTargets(ctx context.Context) ([]string, error) {
 	out, err := c.commands.Output(ctx, commandCmdkey, commandArgCmdkeyList)
 	if err != nil {
+		return nil, err
+	}
+
+	var targets []string
+	for _, target := range parseCredentialManagerTargets(string(out)) {
+		if matchesCredentialAllowlist(target) {
+			targets = append(targets, target)
+		}
+	}
+	return targets, nil
+}
+
+func (c Cleaner) cleanCredentialManager(ctx context.Context, report *Report, group groupScan, execute bool, progress *progressTracker) error {
+	if group.credentialListFail != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
-		report.add(LevelError, "Could not list Windows Credential Manager entries: %v", err)
-		return fmt.Errorf("list Windows Credential Manager entries: %w", err)
+		report.add(LevelError, "Could not list Windows Credential Manager entries: %v", group.credentialListFail)
+		return fmt.Errorf("list Windows Credential Manager entries: %w", group.credentialListFail)
 	}
 
 	var runErrors []error
-	for _, target := range parseCredentialManagerTargets(string(out)) {
+	for _, target := range group.credentialTargets {
 		if ctx.Err() != nil {
 			break
-		}
-		if !matchesCredentialAllowlist(target) {
-			continue
 		}
 
 		if !execute {
 			report.addFor(LevelDryRun, targetLabelCredentialManagerEntry, target, "Would delete %s: %s", targetLabelCredentialManagerEntry, target)
+			progress.step(report.Entries[len(report.Entries)-1])
 			continue
 		}
 
@@ -671,10 +695,12 @@ func (c Cleaner) cleanCredentialManager(ctx context.Context, report *Report, exe
 			}
 			report.addFor(LevelError, targetLabelCredentialManagerEntry, target, "Could not delete %s %s: %v", targetLabelCredentialManagerEntry, target, err)
 			runErrors = append(runErrors, fmt.Errorf("delete Windows Credential Manager entry %q: %w", target, err))
+			progress.step(report.Entries[len(report.Entries)-1])
 			continue
 		}
 
 		report.addFor(LevelDelete, targetLabelCredentialManagerEntry, target, "Deleted %s: %s", targetLabelCredentialManagerEntry, target)
+		progress.step(report.Entries[len(report.Entries)-1])
 	}
 
 	return errors.Join(runErrors...)
