@@ -49,7 +49,12 @@ func TestRunExecuteDeletesExistingTargetsUnderFakeHome(t *testing.T) {
 	target := filepath.Join(home, ".kube", "cache")
 	codexAuth := filepath.Join(home, ".codex", "auth.json")
 	codexSessions := filepath.Join(home, ".codex", "sessions", "history.jsonl")
-	for _, file := range []string{filepath.Join(target, "token"), codexAuth, codexSessions} {
+	shellHistory := filepath.Join(home, ".bash_history")
+	browserCache := filepath.Join(home, ".cache", "chromium", "data")
+	if runtime.GOOS == "windows" {
+		browserCache = filepath.Join(home, "AppData", "Local", "Google", "Chrome", "User Data", "Default", "Cache", "data")
+	}
+	for _, file := range []string{filepath.Join(target, "token"), codexAuth, codexSessions, shellHistory, browserCache} {
 		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -69,15 +74,19 @@ func TestRunExecuteDeletesExistingTargetsUnderFakeHome(t *testing.T) {
 	if _, err := os.Stat(codexAuth); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected baseline to delete the AI tool credential file, stat err=%v", err)
 	}
-	if _, err := os.Stat(codexSessions); err != nil {
-		t.Fatalf("expected baseline to keep the rest of the tool folder, stat err=%v", err)
+	for _, kept := range []string{codexSessions, shellHistory, browserCache} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Fatalf("expected baseline to keep non-credential file %q, stat err=%v", kept, err)
+		}
 	}
 
-	if _, err := cleaner.Run(context.Background(), cleaner.Options{Execute: true, FullToolReset: true}); err != nil {
-		t.Fatalf("Run with full tool reset returned error: %v", err)
+	if _, err := cleaner.Run(context.Background(), cleaner.Options{Execute: true, FullToolReset: true, CleanShellHistory: true, IncludeBrowserProfiles: true}); err != nil {
+		t.Fatalf("Run with opt-in options returned error: %v", err)
 	}
-	if _, err := os.Stat(filepath.Dir(codexAuth)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected full tool reset to delete the tool folder, stat err=%v", err)
+	for _, removed := range []string{filepath.Dir(codexAuth), shellHistory, browserCache} {
+		if _, err := os.Stat(removed); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected opt-in options to delete %q, stat err=%v", removed, err)
+		}
 	}
 	if report.Deleted == 0 {
 		t.Fatalf("expected at least one delete entry, got %#v", report)
@@ -175,7 +184,7 @@ func TestRunExecuteReportsPartialDeletion(t *testing.T) {
 	if _, err := os.Stat(token); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected the file inside to be removed, stat err=%v", err)
 	}
-	if !hasEntry(report, cleaner.LevelError, "Partly deleted") || hasEntry(report, cleaner.LevelError, "Could not delete") {
+	if !hasEntry(report, cleaner.LevelError, "Could not fully delete") {
 		t.Fatalf("expected the failure to be reported as partial, got %#v", report.Entries)
 	}
 }

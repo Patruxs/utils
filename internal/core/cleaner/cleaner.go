@@ -30,6 +30,7 @@ const (
 type Options struct {
 	Execute                bool
 	CleanSSHKeys           bool
+	CleanShellHistory      bool
 	FullToolReset          bool
 	IncludeBrowserProfiles bool
 	CleanCredentialManager bool
@@ -159,17 +160,20 @@ func (c Cleaner) Run(ctx context.Context, opts Options) (Report, error) {
 			clean(sshTargets(home, c.fs))
 		},
 		func() {
+			if !opts.CleanShellHistory {
+				report.add(LevelInfo, "Shell and tool histories were kept. Enable history cleanup to remove them.")
+				return
+			}
+			report.add(LevelWarn, "History cleanup is enabled. This removes shell, REPL, database, and debugger histories.")
 			clean(historyTargets(home, c.fs))
 		},
 		func() {
-			clean(browserCacheTargets(home, c.fs))
-		},
-		func() {
 			if !opts.IncludeBrowserProfiles {
-				report.add(LevelInfo, "Browser profiles were not removed. Enable browser profile cleanup to remove local cookies, sessions, passwords, extensions, local storage, history, and bookmarks.")
+				report.add(LevelInfo, "Browser caches and profiles were not removed. Enable browser profile cleanup to remove caches, cookies, sessions, passwords, extensions, local storage, history, and bookmarks.")
 				return
 			}
-			report.add(LevelWarn, "Browser profile cleanup is enabled. This removes local sign-ins and profile data.")
+			report.add(LevelWarn, "Browser profile cleanup is enabled. This removes browser caches, local sign-ins, and profile data.")
+			clean(browserCacheTargets(home, c.fs))
 			clean(browserProfileTargets(home, c.fs))
 		},
 		func() {
@@ -372,16 +376,10 @@ func (c Cleaner) cleanPath(ctx context.Context, report *Report, home string, pat
 		return nil
 	}
 
-	entriesBefore := 0
-	if info.IsDir() {
-		entriesBefore = countEntriesInside(root, rel)
-	}
-
 	if err := root.RemoveAll(rel); err != nil {
-		entriesLeft := countEntriesInside(root, rel)
-		if entriesLeft < entriesBefore {
-			report.add(LevelError, "Partly deleted %s: %s: removed %d of %d items inside, %d left: %v", label, path, entriesBefore-entriesLeft, entriesBefore, entriesLeft, err)
-			return fmt.Errorf("partly delete %s %q: %w", label, path, err)
+		if info.IsDir() {
+			report.add(LevelError, "Could not fully delete %s: %s: %d items left inside: %v", label, path, countEntriesInside(root, rel), err)
+			return fmt.Errorf("fully delete %s %q: %w", label, path, err)
 		}
 		report.add(LevelError, "Could not delete %s: %s: %v", label, path, err)
 		return fmt.Errorf("delete %s %q: %w", label, path, err)

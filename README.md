@@ -14,11 +14,10 @@ The project is written in Go and builds into a single executable. After it is bu
 | Cleaner | Developer credentials | Cleans local cloud, Git, Docker, Kubernetes, package-manager, and IaC credential and token files. |
 | Cleaner | AI tool credentials | Cleans Codex, Claude, and Gemini sign-in files. |
 | Cleaner | IDE and Copilot sign-ins | Cleans VS Code, VS Code Insiders, VSCodium, Visual Studio, and GitHub Copilot sign-in data. |
-| Cleaner | Full tool reset | Optionally removes whole tool folders and settings: `.gitconfig`, cloud CLI folders, AI tool data, installed runtimes such as Bun and Deno, local VMs such as Lima, Colima, Minikube, and Vagrant, IDE data and history, and Copilot extensions. |
+| Cleaner | Full tool reset | Optionally removes whole tool folders and settings: `.gitconfig`, `.mongorc.js`, cloud CLI folders, AI tool data, installed runtimes such as Bun and Deno, local VMs such as Lima, Colima, Minikube, and Vagrant, IDE data and history, and Copilot extensions. |
 | Cleaner | SSH cleanup | Optionally includes SSH config, known hosts, and key files. |
-| Cleaner | Shell/tool history | Cleans shell, REPL, database, debugger, and CLI history files. |
-| Cleaner | Browser cache cleanup | Cleans Chrome/Chromium, Edge, Brave, CocCoc, Firefox, and Safari caches where supported. |
-| Cleaner | Browser profile cleanup | Optionally removes browser sign-ins, cookies, sessions, passwords, extensions, storage, history, and bookmarks. |
+| Cleaner | Shell/tool history | Optionally cleans shell, REPL, database, debugger, and CLI history files, which may hold typed secrets. |
+| Cleaner | Browser profile cleanup | Optionally removes Chrome/Chromium, Edge, Brave, CocCoc, Firefox, and Safari caches plus browser sign-ins, cookies, sessions, passwords, extensions, storage, history, and bookmarks. |
 | Cleaner | Windows Credential Manager | Optionally deletes allowlisted developer credentials on Windows. |
 | Cleaner | Force-stop target apps | Optionally stops browsers and IDEs before cleanup. |
 | Cleaner | Cleanup log | Writes a structured cleanup log under the current user profile. |

@@ -9,11 +9,12 @@ const (
 	optionBrowserProfiles   = "browser_profiles"
 	optionCredentialManager = "credential_manager"
 	optionForceStop         = "force_stop"
+	optionShellHistory      = "shell_history"
 	optionFullToolReset     = "full_tool_reset"
 
 	cleanerTitle        = "System & Credential Cleaner"
 	cleanerSubtitle     = "Dry-run-first cleanup for local developer credentials, shell history, and user-profile caches."
-	cleanerBaselineNote = "Always included: credential and token files for cloud, Git, package-manager, and AI tools, IDE and Copilot sign-in data, shell/tool histories, and browser caches. Tool folders and settings are kept unless Full tool reset is on. Dry-run only lists deletions; execute deletes matching files. Force-stop acts in both modes."
+	cleanerBaselineNote = "Always included: credential and token files for cloud, Git, package-manager, and AI tools, and IDE and Copilot sign-in data. Histories, browser data, and tool folders are kept unless their option is on. Dry-run only lists deletions; execute deletes matching files. Force-stop acts in both modes."
 	cleanerSafetyNotice = "Deletes only inside the current user profile, never through a link that leads outside it. Admin/root elevation is never requested."
 
 	cleanerRunTimeout = 5 * time.Minute

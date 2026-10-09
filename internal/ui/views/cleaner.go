@@ -235,7 +235,7 @@ func newCleanerOptionsList() common.CheckboxListModel {
 			ID:    optionBrowserProfiles,
 			Label: "Include browser profiles",
 			Details: []string{
-				"Adds full Chrome, Edge, Brave, CocCoc, Firefox, and Safari profile folders, not just caches.",
+				"Adds full Chrome, Edge, Brave, CocCoc, Firefox, and Safari profile folders and their caches.",
 				"Execute removes local sign-ins, cookies/sessions, saved passwords, extensions, local storage, history, and bookmarks.",
 			},
 			FilterText: "browser profiles include caches",
@@ -259,10 +259,19 @@ func newCleanerOptionsList() common.CheckboxListModel {
 			FilterText: "force stop kill running target processes browsers ides ai apps",
 		},
 		{
+			ID:    optionShellHistory,
+			Label: "Clean shell and tool history",
+			Details: []string{
+				"Adds bash, zsh, fish, PowerShell, Python, Node, database, and debugger history files, which may hold typed secrets.",
+				"Execute deletes those history files; dry-run only lists them.",
+			},
+			FilterText: "shell tool history repl database debugger secrets",
+		},
+		{
 			ID:    optionFullToolReset,
 			Label: "Full tool reset",
 			Details: []string{
-				"Adds whole tool folders and settings: .gitconfig, .aws/config, .claude, .codex, .gemini, .bun, .deno, .lima, .colima, .minikube, .vagrant.d, .jupyter, cloud CLI folders, IDE data, and Copilot extensions.",
+				"Adds whole tool folders and settings: .gitconfig, .mongorc.js, .aws/config, .claude, .codex, .gemini, .bun, .deno, .lima, .colima, .minikube, .vagrant.d, .jupyter, cloud CLI folders, IDE data, and Copilot extensions.",
 				"Execute removes installed runtimes, local VMs, tool settings, and IDE history and backups; dry-run only lists them.",
 			},
 			FilterText: "full tool reset folders settings runtimes vms ide ai",
@@ -554,6 +563,7 @@ func (m *CleanerModel) syncOptionsFromList() {
 	m.options.IncludeBrowserProfiles = m.optionsList.Checked(optionBrowserProfiles)
 	m.options.CleanCredentialManager = m.optionsList.Checked(optionCredentialManager)
 	m.options.ForceStopProcesses = m.optionsList.Checked(optionForceStop)
+	m.options.CleanShellHistory = m.optionsList.Checked(optionShellHistory)
 	m.options.FullToolReset = m.optionsList.Checked(optionFullToolReset)
 }
 
@@ -563,6 +573,7 @@ func (m CleanerModel) syncedOptions() cleaner.Options {
 	options.IncludeBrowserProfiles = m.optionsList.Checked(optionBrowserProfiles)
 	options.CleanCredentialManager = m.optionsList.Checked(optionCredentialManager)
 	options.ForceStopProcesses = m.optionsList.Checked(optionForceStop)
+	options.CleanShellHistory = m.optionsList.Checked(optionShellHistory)
 	options.FullToolReset = m.optionsList.Checked(optionFullToolReset)
 	return options
 }
