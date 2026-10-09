@@ -3,7 +3,10 @@ package main
 import (
 	"archive/tar"
 	"archive/zip"
+	"bufio"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,7 +24,22 @@ import (
 const (
 	defaultReleaseRepo = "Patruxs/utils"
 	utilsBinaryName    = "utils"
+	checksumsAssetName = "checksums.txt"
 )
+
+var errUninstallCanceled = errors.New("uninstall canceled")
+
+type packageManager struct {
+	name             string
+	pathMarker       string
+	updateCommand    string
+	uninstallCommand string
+}
+
+var packageManagers = []packageManager{
+	{name: "Homebrew", pathMarker: "/cellar/", updateCommand: "brew upgrade utils", uninstallCommand: "brew uninstall utils"},
+	{name: "Scoop", pathMarker: "/scoop/apps/", updateCommand: "scoop update utils", uninstallCommand: "scoop uninstall utils"},
+}
 
 type githubRelease struct {
 	TagName string               `json:"tag_name"`
@@ -37,6 +55,9 @@ func updateSelf(currentVersion string) error {
 	exePath, err := currentExecutablePath()
 	if err != nil {
 		return err
+	}
+	if manager, ok := packageManagerFor(exePath); ok {
+		return fmt.Errorf("UTILS is managed by %s; run `%s` instead", manager.name, manager.updateCommand)
 	}
 
 	repo := strings.TrimSpace(os.Getenv("UTILS_REPO"))
@@ -61,10 +82,6 @@ func updateSelf(currentVersion string) error {
 	if err != nil {
 		return err
 	}
-	asset, ok := findReleaseAsset(release.Assets, assetName)
-	if !ok {
-		return fmt.Errorf("latest release %s does not include asset %s", release.TagName, assetName)
-	}
 
 	tempDir, err := os.MkdirTemp("", "utils-update-*")
 	if err != nil {
@@ -74,11 +91,10 @@ func updateSelf(currentVersion string) error {
 		defer os.RemoveAll(tempDir)
 	}
 
-	archivePath := filepath.Join(tempDir, asset.Name)
 	newBinaryPath := filepath.Join(tempDir, binaryFileName())
-	fmt.Printf("Downloading %s...\n", asset.Name)
-	if err := downloadFile(asset.BrowserDownloadURL, archivePath); err != nil {
-		return err
+	archivePath, err := downloadVerifiedArchive(release.Assets, assetName, tempDir)
+	if err != nil {
+		return fmt.Errorf("latest release %s: %w", release.TagName, err)
 	}
 	if err := extractBinary(archivePath, newBinaryPath); err != nil {
 		return err
@@ -100,13 +116,18 @@ func updateSelf(currentVersion string) error {
 	return nil
 }
 
-func uninstallSelf() error {
+func uninstallSelf(confirmation io.Reader) error {
 	exePath, err := currentExecutablePath()
 	if err != nil {
 		return err
 	}
+	if manager, ok := packageManagerFor(exePath); ok {
+		return fmt.Errorf("UTILS is managed by %s; run `%s` instead", manager.name, manager.uninstallCommand)
+	}
 
-	fmt.Printf("Warning: uninstalling UTILS by removing %s\n", exePath)
+	if !confirmUninstall(confirmation, os.Stdout, exePath) {
+		return errUninstallCanceled
+	}
 	if runtime.GOOS == "windows" {
 		if err := scheduleWindowsUninstall(exePath); err != nil {
 			return err
@@ -120,6 +141,27 @@ func uninstallSelf() error {
 	}
 	fmt.Println("UTILS executable removed successfully.")
 	return nil
+}
+
+func confirmUninstall(in io.Reader, out io.Writer, exePath string) bool {
+	fmt.Fprintf(out, "Remove %s? [y/N]: ", exePath)
+	answer, _ := bufio.NewReader(in).ReadString('\n')
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes"
+}
+
+func packageManagerFor(exePath string) (packageManager, bool) {
+	resolvedPath, err := filepath.EvalSymlinks(exePath)
+	if err != nil {
+		resolvedPath = exePath
+	}
+	comparablePath := strings.ToLower(strings.ReplaceAll(resolvedPath, `\`, "/"))
+	for _, manager := range packageManagers {
+		if strings.Contains(comparablePath, manager.pathMarker) {
+			return manager, true
+		}
+	}
+	return packageManager{}, false
 }
 
 func currentExecutablePath() (string, error) {
@@ -182,6 +224,75 @@ func findReleaseAsset(assets []githubReleaseAsset, name string) (githubReleaseAs
 		}
 	}
 	return githubReleaseAsset{}, false
+}
+
+func downloadVerifiedArchive(assets []githubReleaseAsset, assetName, dir string) (string, error) {
+	asset, ok := findReleaseAsset(assets, assetName)
+	if !ok {
+		return "", fmt.Errorf("release does not include asset %s", assetName)
+	}
+	checksumsAsset, ok := findReleaseAsset(assets, checksumsAssetName)
+	if !ok {
+		return "", fmt.Errorf("release does not include %s; refusing to install an unverified binary", checksumsAssetName)
+	}
+
+	checksumsPath := filepath.Join(dir, checksumsAssetName)
+	if err := downloadFile(checksumsAsset.BrowserDownloadURL, checksumsPath); err != nil {
+		return "", err
+	}
+	archivePath := filepath.Join(dir, assetName)
+	fmt.Printf("Downloading %s...\n", assetName)
+	if err := downloadFile(asset.BrowserDownloadURL, archivePath); err != nil {
+		return "", err
+	}
+	if err := verifyArchiveChecksum(archivePath, checksumsPath); err != nil {
+		return "", err
+	}
+	return archivePath, nil
+}
+
+func verifyArchiveChecksum(archivePath, checksumsPath string) error {
+	archiveName := filepath.Base(archivePath)
+	want, err := expectedChecksum(checksumsPath, archiveName)
+	if err != nil {
+		return err
+	}
+	got, err := fileSHA256(archivePath)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(got, want) {
+		return fmt.Errorf("checksum mismatch for %s: refusing to install", archiveName)
+	}
+	return nil
+}
+
+func expectedChecksum(checksumsPath, archiveName string) (string, error) {
+	data, err := os.ReadFile(checksumsPath)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && strings.TrimPrefix(fields[1], "*") == archiveName {
+			return fields[0], nil
+		}
+	}
+	return "", fmt.Errorf("%s has no entry for %s; refusing to install an unverified binary", checksumsAssetName, archiveName)
+}
+
+func fileSHA256(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 func downloadFile(url, destination string) error {
