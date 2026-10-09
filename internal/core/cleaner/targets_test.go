@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -20,7 +21,7 @@ func TestDeveloperTargetsIncludeIDEAndCopilotData(t *testing.T) {
 
 	switch runtime.GOOS {
 	case osWindows:
-		assertTarget(t, targets, filepath.Join(appData, "Code", "User", "globalStorage"), targetLabelIDEAuthCacheData)
+		assertTarget(t, targets, filepath.Join(appData, "Code", "User", "globalStorage"), targetLabelVSCodeGlobalState)
 		assertTarget(t, targets, filepath.Join(appData, "Code", "Cache"), targetLabelIDEAuthCacheData)
 		assertTarget(t, targets, filepath.Join(appData, "Code - Insiders", "User", "workspaceStorage"), targetLabelIDEAuthCacheData)
 		assertTarget(t, targets, filepath.Join(localAppData, ".IdentityService"), targetLabelIDECredential)
@@ -28,18 +29,24 @@ func TestDeveloperTargetsIncludeIDEAndCopilotData(t *testing.T) {
 		assertTarget(t, targets, filepath.Join(localAppData, "Microsoft", "VSCommon"), targetLabelIDEAuthCacheData)
 		assertTarget(t, targets, filepath.Join(appData, "GitHub Copilot"), targetLabelCopilotAuthCacheData)
 	case "darwin":
-		assertTarget(t, targets, filepath.Join(home, "Library", "Application Support", "Code", "User", "globalStorage"), targetLabelIDEAuthCacheData)
+		assertTarget(t, targets, filepath.Join(home, "Library", "Application Support", "Code", "User", "globalStorage"), targetLabelVSCodeGlobalState)
 		assertTarget(t, targets, filepath.Join(home, "Library", "Caches", "com.microsoft.VSCode"), targetLabelIDEAuthCacheData)
 		assertTarget(t, targets, filepath.Join(home, "Library", "Application Support", "VisualStudio"), targetLabelIDEAuthCacheData)
 		assertTarget(t, targets, filepath.Join(home, "Library", "Application Support", "GitHub Copilot"), targetLabelCopilotAuthCacheData)
 	default:
-		assertTarget(t, targets, filepath.Join(home, ".config", "Code", "User", "globalStorage"), targetLabelIDEAuthCacheData)
+		assertTarget(t, targets, filepath.Join(home, ".config", "Code", "User", "globalStorage"), targetLabelVSCodeGlobalState)
 		assertTarget(t, targets, filepath.Join(home, ".config", "Code", "Cache"), targetLabelIDEAuthCacheData)
 		assertTarget(t, targets, filepath.Join(home, ".cache", "Code"), targetLabelIDEAuthCacheData)
 		assertTarget(t, targets, filepath.Join(home, ".config", "GitHub Copilot"), targetLabelCopilotAuthCacheData)
 	}
 
 	assertTarget(t, targets, filepath.Join(home, ".github-copilot"), targetLabelCopilotAuthCacheData)
+
+	for _, target := range developerCredentialTargets(home, fs) {
+		if strings.Contains(target.path, "globalStorage") {
+			t.Fatalf("expected VS Code global state to stay out of the always-included targets, got %q", target.path)
+		}
+	}
 }
 
 func TestBrowserTargetsIncludeLinuxEdgeAndFlatpakBrowsers(t *testing.T) {

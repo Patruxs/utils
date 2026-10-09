@@ -43,6 +43,7 @@ const (
 	targetLabelDeveloperConfig        = "developer tool folder/config"
 	targetLabelAITool                 = "AI tool credential/config/cache"
 	targetLabelIDEAuthCacheData       = "IDE authentication/cache/data"
+	targetLabelVSCodeGlobalState      = "VS Code global state (settings database, extension state, sign-ins)"
 	targetLabelCopilotAuthCacheData   = "Copilot authentication/cache/data"
 	targetLabelSSHClientConfig        = "SSH client config"
 	targetLabelSSHKnownHosts          = "SSH known hosts"

@@ -102,13 +102,6 @@ func developerCredentialTargets(home string, fs FileSystem) []targetPath {
 		targetPath{filepath.Join(home, ".config", "github-copilot", "apps.json"), targetLabelCopilotCredential},
 	)
 
-	for _, dataDir := range vsCodeDataDirs(home, fs) {
-		targets = append(targets,
-			targetPath{filepath.Join(dataDir, "User", "globalStorage", "state.vscdb"), targetLabelIDECredential},
-			targetPath{filepath.Join(dataDir, "User", "globalStorage", "state.vscdb.backup"), targetLabelIDECredential},
-		)
-	}
-
 	if runtime.GOOS == osWindows {
 		targets = append(targets,
 			envTarget(fs, envAPPDATA, targetLabelDeveloperCredential, "gcloud", "credentials.db"),
@@ -123,22 +116,6 @@ func developerCredentialTargets(home string, fs FileSystem) []targetPath {
 	}
 
 	return compactTargets(targets)
-}
-
-func vsCodeDataDirs(home string, fs FileSystem) []string {
-	products := []string{"Code", "Code - Insiders", "VSCodium"}
-	var dirs []string
-	for _, product := range products {
-		switch runtime.GOOS {
-		case osWindows:
-			dirs = append(dirs, envTarget(fs, envAPPDATA, "", product).path)
-		case "darwin":
-			dirs = append(dirs, filepath.Join(home, "Library", "Application Support", product))
-		default:
-			dirs = append(dirs, filepath.Join(home, ".config", product))
-		}
-	}
-	return dirs
 }
 
 func fullToolResetTargets(home string, fs FileSystem) []targetPath {
@@ -309,7 +286,7 @@ func vsCodeTargets(product vsCodeProduct) []targetPath {
 
 	if strings.TrimSpace(product.dataDir) != "" {
 		targets = append(targets,
-			targetPath{filepath.Join(product.dataDir, "User", "globalStorage"), targetLabelIDEAuthCacheData},
+			targetPath{filepath.Join(product.dataDir, "User", "globalStorage"), targetLabelVSCodeGlobalState},
 			targetPath{filepath.Join(product.dataDir, "User", "workspaceStorage"), targetLabelIDEAuthCacheData},
 			targetPath{filepath.Join(product.dataDir, "User", "History"), targetLabelIDEAuthCacheData},
 			targetPath{filepath.Join(product.dataDir, "Backups"), targetLabelIDEAuthCacheData},

@@ -283,7 +283,7 @@ func newCleanerOptionsList() common.CheckboxListModel {
 			ID:    optionFullToolReset,
 			Label: "Full tool reset",
 			Details: []string{
-				"Adds whole tool folders and settings: .gitconfig, .mongorc.js, .aws/config, .claude, .codex, .gemini, .bun, .deno, .lima, .colima, .minikube, .vagrant.d, .jupyter, cloud CLI folders, IDE data, and Copilot extensions.",
+				"Adds whole tool folders and settings: .gitconfig, .mongorc.js, .aws/config, .claude, .codex, .gemini, .bun, .deno, .lima, .colima, .minikube, .vagrant.d, .jupyter, cloud CLI folders, VS Code global state (settings database, extension state, sign-ins) and other IDE data, and Copilot extensions.",
 				"Execute removes installed runtimes, local VMs, tool settings, and IDE history and backups; dry-run only lists them.",
 			},
 			FilterText: "full tool reset folders settings runtimes vms ide ai",

@@ -13,8 +13,8 @@ The project is written in Go and builds into a single executable. After it is bu
 | Cleaner | Execute mode | Deletes selected matching local files. |
 | Cleaner | Developer credentials | Cleans local cloud, Git, Docker, Kubernetes, package-manager, and IaC credential and token files. |
 | Cleaner | AI tool credentials | Cleans Codex, Claude, and Gemini sign-in files. |
-| Cleaner | IDE and Copilot sign-ins | Cleans VS Code, VS Code Insiders, VSCodium, Visual Studio, and GitHub Copilot sign-in data. |
-| Cleaner | Full tool reset | Optionally removes whole tool folders and settings: `.gitconfig`, `.mongorc.js`, cloud CLI folders, AI tool data, installed runtimes such as Bun and Deno, local VMs such as Lima, Colima, Minikube, and Vagrant, IDE data and history, and Copilot extensions. |
+| Cleaner | Copilot and Visual Studio sign-ins | Cleans GitHub Copilot sign-in tokens and, on Windows, the Visual Studio identity cache. VS Code sign-ins live in VS Code global state, which only Full tool reset removes. |
+| Cleaner | Full tool reset | Optionally removes whole tool folders and settings: `.gitconfig`, `.mongorc.js`, cloud CLI folders, AI tool data, installed runtimes such as Bun and Deno, local VMs such as Lima, Colima, Minikube, and Vagrant, VS Code global state (settings database, extension state, sign-ins), other IDE data and history, and Copilot extensions. |
 | Cleaner | SSH cleanup | Optionally includes SSH config, known hosts, and key files. |
 | Cleaner | Shell/tool history | Optionally cleans shell, REPL, database, debugger, and CLI history files, which may hold typed secrets. |
 | Cleaner | Browser profile cleanup | Optionally removes Chrome/Chromium, Edge, Brave, CocCoc, Firefox, and Safari caches plus browser sign-ins, cookies, sessions, passwords, extensions, storage, history, and bookmarks. |
