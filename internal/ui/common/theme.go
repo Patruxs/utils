@@ -21,7 +21,6 @@ type Tone int
 
 const (
 	ToneNormal Tone = iota
-	ToneSubtle
 	ToneAccent
 	ToneSuccess
 	ToneWarning
@@ -53,8 +52,6 @@ func (t Tone) Glyph() string {
 
 func (t Tone) color() (lipgloss.TerminalColor, bool) {
 	switch t {
-	case ToneSubtle:
-		return ColorMuted, true
 	case ToneAccent:
 		return ColorAccent, true
 	case ToneSuccess:

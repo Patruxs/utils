@@ -136,7 +136,7 @@ func (c Confirm) buttons() string {
 func Overlay(base, top string, width, height int) string {
 	baseLines := strings.Split(FitHeight(base, height), "\n")
 	for i, line := range baseLines {
-		baseLines[i] = Dim(line, width)
+		baseLines[i] = dim(line, width)
 	}
 	if top == "" {
 		return strings.Join(baseLines, "\n")
@@ -162,6 +162,6 @@ func Overlay(base, top string, width, height int) string {
 	return strings.Join(baseLines, "\n")
 }
 
-func Dim(line string, width int) string {
+func dim(line string, width int) string {
 	return Muted.Faint(true).Render(Truncate(ansi.Strip(line), width))
 }
