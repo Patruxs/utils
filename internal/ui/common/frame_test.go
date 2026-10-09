@@ -26,8 +26,9 @@ func TestFrameComponentsNeverExceedTheirWidth(t *testing.T) {
 		rendered := map[string]string{
 			"panel":   Panel{Title: "Include browser profiles and caches", Meta: "1/29 · 0 checked", Variant: PanelFocused, Width: width, Height: 4}.Render(body),
 			"danger":  ConfirmDialog(width, "Change system settings", []string{"• " + body}, []string{"Cancel", "Run these changes"}, 0),
-			"footer":  Footer(width, keys, Pill("DRY-RUN", ToneAccent)),
-			"header":  Header(width, 24, []string{"Network & Diagnostics Manager", "Hosts: Add Entry"}, "v1.2.3"),
+			"footer":  Footer(width, Hints(keys), Pill("EXECUTING", ToneDanger)),
+			"header":  Header(width, []string{"Cleaner", "Network"}, 1, "v1.2.3 · linux/amd64 · pat@nobara", "v1.2.3"),
+			"modal":   NewConfirm("Delete 7 files and 1 folder", "Delete", "Credentials and tokens   7", body).View(width, 10),
 			"running": RunStatus(width, "⣾", "Running: Run Network Diagnostics", body, 0),
 			"counts":  RenderCounts(width, []Count{{Label: "would delete", N: 7}, {Label: "skipped", N: 42}, {Label: "errors"}}),
 			"notice":  Notice(width, ToneWarning, body),
@@ -50,13 +51,17 @@ func TestTooSmallBelowMinimumSize(t *testing.T) {
 		width, height int
 		tooSmall      bool
 	}{
-		{39, 10, true},
-		{40, 9, true},
-		{40, 10, false},
+		{49, 10, true},
+		{50, 9, true},
+		{12, 3, true},
+		{50, 10, false},
 	} {
 		message, tooSmall := TooSmall(size.width, size.height)
 		if tooSmall != size.tooSmall {
 			t.Fatalf("TooSmall(%d, %d) = %v, want %v", size.width, size.height, tooSmall, size.tooSmall)
+		}
+		if lines := strings.Split(message, "\n"); tooSmall && len(lines) != size.height {
+			t.Fatalf("too-small screen at %dx%d has %d rows", size.width, size.height, len(lines))
 		}
 		for _, line := range strings.Split(message, "\n") {
 			if lipgloss.Width(line) > size.width {

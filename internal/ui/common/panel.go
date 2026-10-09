@@ -61,7 +61,7 @@ func (p Panel) border() (lipgloss.Border, lipgloss.Style) {
 	case PanelFocused:
 		return lipgloss.RoundedBorder(), lipgloss.NewStyle().Foreground(ColorAccent)
 	default:
-		return lipgloss.RoundedBorder(), lipgloss.NewStyle().Foreground(ColorBorder)
+		return lipgloss.RoundedBorder(), lipgloss.NewStyle().Foreground(ColorMuted)
 	}
 }
 
