@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -217,7 +218,7 @@ func (m CleanerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.finishRun(msg), nil
 	case cleanerLogSavedMsg:
 		if msg.err != nil {
-			return m, common.Notify(common.ToneDanger, "Could not save the log: "+msg.err.Error())
+			return m, common.Notify(common.ToneDanger, "Log not saved · "+rootCause(msg.err))
 		}
 		return m, common.Notify(common.ToneSuccess, "Log saved · "+msg.path)
 	case spinner.TickMsg:
@@ -460,12 +461,13 @@ func (m CleanerModel) FooterKeys() help.KeyMap {
 	case m.focus == focusPreview:
 		return common.KeyList{m.keys.Scroll, m.keys.ToScope, m.keys.Page, m.keys.Delete, m.keys.SaveDryRun}
 	}
-	keys := common.KeyList{m.keys.Toggle, m.keys.Delete, m.keys.SaveDryRun}
-	if m.previewOverflows() {
-		keys = append(keys, m.keys.ToPreview, m.keys.Page)
-	}
+	keys := common.KeyList{m.keys.Toggle, m.keys.Delete}
 	if m.stacked() {
 		keys = append(keys, m.keys.Info)
+	}
+	keys = append(keys, m.keys.SaveDryRun)
+	if m.previewOverflows() {
+		keys = append(keys, m.keys.ToPreview, m.keys.Page)
 	}
 	return keys
 }
@@ -1056,6 +1058,14 @@ func saveReportLogCmd(save CleanerSaveFunc, path string, report cleaner.Report) 
 		saved, err := save(path, report)
 		return cleanerLogSavedMsg{path: saved, err: err}
 	}
+}
+
+func rootCause(err error) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err.Error()
+	}
+	return err.Error()
 }
 
 func defaultCleanerLogPath(home string, now time.Time) string {
