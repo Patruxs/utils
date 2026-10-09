@@ -223,8 +223,10 @@ func newCleanerOptionsList() common.CheckboxListModel {
 			FilterText: "browser profiles include caches",
 		},
 		{
-			ID:    optionCredentialManager,
-			Label: "Clean Windows Credential Manager allowlist" + credentialManagerHint(),
+			ID:      optionCredentialManager,
+			Label:   "Clean Windows Credential Manager allowlist",
+			Tag:     credentialManagerTag(),
+			TagTone: common.ToneSubtle,
 			Details: []string{
 				"Windows only: scans Credential Manager for allowlisted dev entries such as Git, cloud CLIs, Docker, kube, npm, Terraform, Visual Studio, VS Code, Copilot, and AI tools.",
 				"Dry-run lists matching entries; execute deletes only those allowlisted matches.",
@@ -232,8 +234,10 @@ func newCleanerOptionsList() common.CheckboxListModel {
 			FilterText: "windows credential manager allowlist credentials",
 		},
 		{
-			ID:    optionForceStop,
-			Label: "Force stop running target processes",
+			ID:      optionForceStop,
+			Label:   "Force stop running target processes",
+			Tag:     "also in dry-run",
+			TagTone: common.ToneWarning,
 			Details: []string{
 				"Stops running Chrome, Edge, Firefox, VS Code, and Visual Studio before cleanup so locked auth/profile files can be handled.",
 				"This happens in dry-run too. Dry-run still only logs file and Credential Manager deletions.",
@@ -957,9 +961,9 @@ func confirmationRow(selected bool, label string) string {
 	return cleanerRow(selected, "", label)
 }
 
-func credentialManagerHint() string {
+func credentialManagerTag() string {
 	if runtime.GOOS != osWindows {
-		return " (Windows only)"
+		return "Windows only"
 	}
 	return ""
 }
