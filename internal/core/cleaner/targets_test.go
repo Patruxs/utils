@@ -49,23 +49,48 @@ func TestDeveloperTargetsIncludeIDEAndCopilotData(t *testing.T) {
 	}
 }
 
-func TestBrowserTargetsIncludeLinuxEdgeAndFlatpakBrowsers(t *testing.T) {
+func TestBrowserTargetsMatchTheOperatingSystem(t *testing.T) {
 	if runtime.GOOS == osWindows {
-		t.Skip("Linux and Flatpak browser paths are not used on Windows")
+		t.Skip("Windows browser paths come from APPDATA and LOCALAPPDATA")
 	}
 	home := t.TempDir()
 	fs := envOnlyFS{}
-
 	profiles := browserProfileTargets(home, fs)
+	caches := browserCacheTargets(home, fs)
+
+	if runtime.GOOS == "darwin" {
+		assertTarget(t, profiles, filepath.Join(home, "Library", "Application Support", "Microsoft Edge"), targetLabelBrowserProfileRoot)
+		assertTarget(t, caches, filepath.Join(home, "Library", "Caches", "Microsoft Edge"), targetLabelBrowserCache)
+		assertNoTargetUnder(t, append(profiles, caches...), filepath.Join(home, ".var"), filepath.Join(home, ".config"), filepath.Join(home, ".mozilla"))
+		return
+	}
+
 	assertTarget(t, profiles, filepath.Join(home, ".config", "microsoft-edge"), targetLabelBrowserProfileRoot)
 	assertTarget(t, profiles, filepath.Join(home, ".var", "app", "com.microsoft.Edge", "config", "microsoft-edge"), targetLabelBrowserProfileRoot)
 	assertTarget(t, profiles, filepath.Join(home, ".var", "app", "com.google.Chrome", "config", "google-chrome"), targetLabelBrowserProfileRoot)
 	assertTarget(t, profiles, filepath.Join(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"), targetLabelBrowserProfile)
-
-	caches := browserCacheTargets(home, fs)
 	assertTarget(t, caches, filepath.Join(home, ".cache", "microsoft-edge"), targetLabelBrowserCache)
 	assertTarget(t, caches, filepath.Join(home, ".cache", "BraveSoftware", "Brave-Browser"), targetLabelBrowserCache)
 	assertTarget(t, caches, filepath.Join(home, ".var", "app", "com.microsoft.Edge", "cache", "microsoft-edge"), targetLabelBrowserCache)
+
+	all := append(append(append(append(append(profiles, caches...),
+		developerCredentialTargets(home, fs)...),
+		fullToolResetTargets(home, fs)...),
+		sshTargets(home, fs)...),
+		historyTargets(home, fs)...)
+	assertNoTargetUnder(t, all, filepath.Join(home, "Library"))
+}
+
+func assertNoTargetUnder(t *testing.T, targets []targetPath, roots ...string) {
+	t.Helper()
+
+	for _, target := range targets {
+		for _, root := range roots {
+			if strings.HasPrefix(filepath.Clean(target.path)+string(filepath.Separator), root+string(filepath.Separator)) {
+				t.Fatalf("expected no target under %q on %s, got %q", root, runtime.GOOS, target.path)
+			}
+		}
+	}
 }
 
 func TestCredentialManagerAllowlistIncludesVisualStudioAndCopilot(t *testing.T) {
