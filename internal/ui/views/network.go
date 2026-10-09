@@ -432,18 +432,18 @@ func (m NetworkModel) actionsView(width, height int) string {
 		return m.wideActionsView(width, height)
 	}
 
-	detailRows := networkDetailMaxRows
+	detail := m.actionDetailLines(width - 4)
+	detailRows := common.MinInt(len(detail), networkDetailMaxRows)
 	sessionRows := 1
 	listRows := func() int { return height - (detailRows + 2) - sessionRows - 2 }
 	if listRows() < networkSessionMinListRows {
 		sessionRows = 0
 	}
 	if listRows() < networkSessionMinListRows {
-		detailRows = networkDetailTightRows
+		detailRows = common.MinInt(detailRows, networkDetailTightRows)
 	}
 
 	rows := []string{m.actionsPanel(width, common.MaxInt(networkListMinRows, listRows()))}
-	detail := m.actionDetailLines(width - 4)
 	rows = append(rows, common.Panel{Title: m.currentAction().title, Width: width}.Render(strings.Join(firstLines(detail, detailRows), "\n")))
 	if sessionRows > 0 {
 		rows = append(rows, common.Truncate(common.Muted.Render(m.persistentModeLine()), width))
@@ -733,7 +733,7 @@ func (m NetworkModel) networkActionChange(action networkActionID, hosts corenetw
 	case networkActionHostsBackup:
 		return fmt.Sprintf("copies %s to %s.backup-<time>.", hostsPath, hostsPath)
 	case networkActionHostsAdd:
-		return fmt.Sprintf("appends \"%s\t%s\t%s\" to %s.", hosts.IP, hosts.Domain, corenetwork.HostsManagedMarker, hostsPath)
+		return fmt.Sprintf("appends \"%s<TAB>%s<TAB>%s\" to %s.", hosts.IP, hosts.Domain, corenetwork.HostsManagedMarker, hostsPath)
 	case networkActionHostsRemoveCustom:
 		return fmt.Sprintf("removes lines tagged %s from %s; all other lines stay.", corenetwork.HostsManagedMarker, hostsPath)
 	case networkActionHostsRestore:
