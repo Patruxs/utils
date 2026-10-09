@@ -1247,7 +1247,7 @@ done
 func windowsOptimizeNetworkScript() string {
 	return `
 $ErrorActionPreference = "Stop"
-$tcpSettings = @("autotuninglevel=normal", "chimney=enabled", "rss=enabled", "timestamps=disabled", "ecncapability=enabled")
+$tcpSettings = @("autotuninglevel=normal", "rss=enabled", "timestamps=disabled", "ecncapability=enabled")
 foreach ($setting in $tcpSettings) {
     netsh int tcp set global $setting
     if ($LASTEXITCODE -ne 0) { throw "netsh int tcp set global $setting failed with exit code $LASTEXITCODE" }
