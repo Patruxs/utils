@@ -35,12 +35,12 @@ const (
 	cleanupModeCount
 )
 
-type cleanerCompactLevel int
+type compactionLevel int
 
 const (
-	compactNone cleanerCompactLevel = iota
+	compactNone compactionLevel = iota
 	compactWithoutNotes
-	compactWithoutOptionDetails
+	compactWithoutDetails
 	compactWithoutSubtitle
 )
 
@@ -88,7 +88,7 @@ type CleanerModel struct {
 	cancelCleanup context.CancelFunc
 	notice        string
 	layout        common.Layout
-	compactLevel  cleanerCompactLevel
+	compactLevel  compactionLevel
 	state         ViewState
 	confirmation  executeConfirmationSelection
 	modeSelection cleanupModeSelection
@@ -432,7 +432,7 @@ func (m CleanerModel) View() string {
 		b.WriteString("\n\n")
 	default:
 		m.optionsList.SetFocused(true)
-		m.optionsList.SetHideDetails(m.compactLevel >= compactWithoutOptionDetails)
+		m.optionsList.SetHideDetails(m.compactLevel >= compactWithoutDetails)
 
 		if m.compactLevel < compactWithoutNotes {
 			b.WriteString(layout.RenderWrapped(cleanerBaselineNote, common.Muted.Render))

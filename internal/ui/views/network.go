@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	corenetwork "utils/internal/core/network"
 	"utils/internal/ui/common"
@@ -90,6 +91,8 @@ type NetworkModel struct {
 	cancelNetwork    context.CancelFunc
 	notice           string
 	layout           common.Layout
+	compactLevel     compactionLevel
+	actionRows       int
 	state            networkViewState
 	action           int
 	checkedActions   map[networkActionID]bool
@@ -134,10 +137,8 @@ const (
 	networkRunTimeout   = 2 * time.Minute
 
 	defaultNetworkLogViewportHeight = 12
-	networkActionsReservedHeight    = 11
-	networkActionsMinHeight         = 6
-	networkLogReservedHeight        = 18
-	networkLogMinHeight             = 5
+	networkActionsMinHeight         = 3
+	networkLogMinHeight             = 3
 	networkLogMaxHeight             = 20
 )
 
@@ -313,6 +314,13 @@ func (m NetworkModel) Init() tea.Cmd {
 }
 
 func (m NetworkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	fitted := next.(NetworkModel)
+	fitted.fitToHeight()
+	return fitted, cmd
+}
+
+func (m NetworkModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	if m.state == networkStateRunning {
 		var cmd tea.Cmd
@@ -407,8 +415,11 @@ func (m NetworkModel) View() string {
 
 	b.WriteString(layout.RenderWrapped(networkTitle, common.Title.Render))
 	b.WriteString("\n")
-	b.WriteString(layout.RenderWrapped(networkSubtitle, common.Muted.Render))
-	b.WriteString("\n\n")
+	if m.compactLevel < compactWithoutSubtitle {
+		b.WriteString(layout.RenderWrapped(networkSubtitle, common.Muted.Render))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 
 	switch m.state {
 	case networkStateRunning:
@@ -438,8 +449,10 @@ func (m NetworkModel) View() string {
 		b.WriteString(confirmationRow(m.confirmRun, "Run these changes"))
 		b.WriteString("\n")
 	default:
-		b.WriteString(layout.RenderWrapped(networkBaselineNote+" "+corenetwork.ElevationNote(), common.Muted.Render))
-		b.WriteString("\n")
+		if m.compactLevel < compactWithoutNotes {
+			b.WriteString(layout.RenderWrapped(networkBaselineNote+" "+corenetwork.ElevationNote(), common.Muted.Render))
+			b.WriteString("\n")
+		}
 		persistence := "off"
 		if m.persistentMode {
 			persistence = "on"
@@ -486,7 +499,39 @@ func (m *NetworkModel) layoutComponents() {
 	width := common.MinInt(50, common.MaxInt(20, m.layout.Width-10))
 	m.hostDomainInput.Width = width
 	m.hostIPInput.Width = width
-	m.logViewer.SetSize(m.layout.Width, m.layout.ViewportHeight(networkLogReservedHeight, networkLogMinHeight, networkLogMaxHeight))
+	m.logViewer.SetSize(m.layout.Width, m.logViewer.viewport.Height)
+}
+
+func (m *NetworkModel) fitToHeight() {
+	logMinimumExtra := 0
+	if m.report != nil {
+		logMinimumExtra = networkLogMinHeight - 1
+	}
+
+	for level := compactNone; level <= compactWithoutSubtitle; level++ {
+		probe := *m
+		probe.compactLevel = level
+		probe.actionRows = networkActionsMinHeight
+		probe.logViewer.viewport.Height = 1
+		spare := m.layout.Height - lipgloss.Height(probe.View()) - logMinimumExtra
+		if spare < 0 && level < compactWithoutSubtitle {
+			continue
+		}
+
+		spare = common.MaxInt(0, spare)
+		m.compactLevel = level
+		logHeight := networkLogMinHeight
+		if m.report != nil {
+			logHeight = common.MinInt(networkLogMaxHeight, networkLogMinHeight+spare/2)
+			spare -= logHeight - networkLogMinHeight
+		}
+		m.actionRows = common.MinInt(len(networkActions), networkActionsMinHeight+spare)
+		if m.report != nil {
+			spare -= m.actionRows - networkActionsMinHeight
+			m.logViewer.SetSize(m.layout.Width, common.MinInt(networkLogMaxHeight, logHeight+spare))
+		}
+		return
+	}
 }
 
 func (m NetworkModel) mouseInLogViewer(msg tea.MouseMsg) bool {
@@ -779,7 +824,7 @@ func (m NetworkModel) renderActions() string {
 		selected := m.action == index
 		checked := m.checkedActions != nil && m.checkedActions[action.id]
 		b.WriteString(networkActionRow(selected, checked, action.title))
-		if selected {
+		if selected && m.compactLevel < compactWithoutDetails {
 			for _, detail := range action.details {
 				for _, line := range common.WrapLine("      - ", detail, width) {
 					b.WriteString(common.Muted.Render(line))
@@ -797,9 +842,7 @@ func (m NetworkModel) renderActions() string {
 }
 
 func (m NetworkModel) visibleActionRange() (int, int) {
-	rows := m.layout.ListHeight(len(networkActions), networkActionsReservedHeight, networkActionsMinHeight)
-	rows = common.MaxInt(networkActionsMinHeight, rows-2)
-	rows = common.MinInt(rows, len(networkActions))
+	rows := common.MinInt(common.MaxInt(networkActionsMinHeight, m.actionRows), len(networkActions))
 
 	start := m.action - rows/2
 	if start < 0 {
@@ -855,9 +898,17 @@ func (m *NetworkLogViewerModel) SetSize(width, height int) {
 		height = defaultNetworkLogViewportHeight
 	}
 
+	if width == m.viewport.Width && height == m.viewport.Height {
+		return
+	}
+
+	atBottom := m.viewport.AtBottom()
 	m.viewport.Width = width
 	m.viewport.Height = height
 	m.refreshContent()
+	if atBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m *NetworkLogViewerModel) SetReport(report corenetwork.Report) {
