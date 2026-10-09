@@ -4,11 +4,10 @@ import "github.com/charmbracelet/lipgloss"
 
 var (
 	ColorAccent  = adaptiveColor("#7AA2F7", "111", "12", "#2F5BD3", "26", "4")
-	ColorSubtle  = adaptiveColor("#8B93A7", "245", "8", "#6A7080", "242", "8")
-	ColorBorder  = adaptiveColor("#3B4261", "238", "8", "#C3C8D4", "251", "7")
-	ColorSuccess = adaptiveColor("#9ECE6A", "150", "10", "#2E7D32", "28", "2")
-	ColorWarning = adaptiveColor("#E0AF68", "179", "11", "#9A6700", "136", "3")
-	ColorDanger  = adaptiveColor("#F7768E", "204", "9", "#C62828", "160", "1")
+	ColorMuted   = adaptiveColor("#565F89", "60", "8", "#8A8FA8", "103", "8")
+	ColorSuccess = adaptiveColor("#9ECE6A", "150", "2", "#2E7D32", "28", "2")
+	ColorWarning = adaptiveColor("#E0AF68", "179", "3", "#9A6700", "136", "3")
+	ColorDanger  = adaptiveColor("#F7768E", "203", "9", "#C62828", "160", "1")
 )
 
 func adaptiveColor(darkTrue, dark256, darkANSI, lightTrue, light256, lightANSI string) lipgloss.CompleteAdaptiveColor {
@@ -44,7 +43,7 @@ func (t Tone) Glyph() string {
 	case ToneSuccess:
 		return "✓"
 	case ToneWarning:
-		return "!"
+		return "⚠"
 	case ToneDanger:
 		return "✗"
 	default:
@@ -55,7 +54,7 @@ func (t Tone) Glyph() string {
 func (t Tone) color() (lipgloss.TerminalColor, bool) {
 	switch t {
 	case ToneSubtle:
-		return ColorSubtle, true
+		return ColorMuted, true
 	case ToneAccent:
 		return ColorAccent, true
 	case ToneSuccess:

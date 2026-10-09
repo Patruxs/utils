@@ -4,71 +4,140 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/lipgloss"
 )
 
 const (
-	MarginX             = 1
-	MinWidth            = 40
-	MinHeight           = 10
-	HeaderRuleMinHeight = 20
-	appName             = "UTILS"
-	appTagline          = "Developer Hub"
-	crumbSeparator      = " › "
+	MarginX         = 1
+	MinWidth        = 50
+	MinHeight       = 10
+	headerRows      = 2
+	wordmarkGlyph   = "◆"
+	wordmarkName    = "UTILS"
+	wordmarkGap     = "  "
+	tabGap          = " "
+	hintSeparator   = " · "
+	infoSeparator   = " · "
+	headerMinGap    = 2
+	ruleLight       = "─"
+	ruleHeavy       = "━"
+	ruleHeavyStart  = "╴"
+	ruleHeavyFinish = "╶"
 )
 
-func HeaderHeight(height int) int {
-	if height < HeaderRuleMinHeight {
-		return 1
-	}
-	return 2
+func HeaderHeight(int) int {
+	return headerRows
 }
 
-func Header(width, height int, crumbs []string, version string) string {
-	left := Title.Render(appName)
-	if len(crumbs) == 0 {
-		left += "  " + Muted.Render(appTagline)
-	}
-	for i, crumb := range crumbs {
-		if i == len(crumbs)-1 {
-			crumb = lipgloss.NewStyle().Bold(true).Render(crumb)
+func Wordmark() string {
+	return Accent.Render(wordmarkGlyph) + " " + lipgloss.NewStyle().Bold(true).Render(wordmarkName)
+}
+
+type tabCell struct {
+	start int
+	end   int
+}
+
+func tabCells(tabs []string) []tabCell {
+	cells := make([]tabCell, 0, len(tabs))
+	x := lipgloss.Width(wordmarkGlyph + " " + wordmarkName)
+	for i, tab := range tabs {
+		x += len(tabGap)
+		if i == 0 {
+			x += len(wordmarkGap) - len(tabGap)
 		}
-		left += Muted.Render(crumbSeparator) + crumb
+		width := lipgloss.Width(tab) + 2
+		cells = append(cells, tabCell{start: x, end: x + width})
+		x += width
+	}
+	return cells
+}
+
+func TabAt(tabs []string, x int) int {
+	for i, cell := range tabCells(tabs) {
+		if x >= cell.start && x < cell.end {
+			return i
+		}
+	}
+	return -1
+}
+
+func Header(width int, tabs []string, active int, infoChoices ...string) string {
+	left := Wordmark()
+	for i, tab := range tabs {
+		gap := tabGap
+		if i == 0 {
+			gap = wordmarkGap
+		}
+		label := Muted.Render(" " + tab + " ")
+		if i == active {
+			label = lipgloss.NewStyle().Bold(true).Foreground(ColorAccent).Render(" " + tab + " ")
+		}
+		left += gap + label
 	}
 
 	right := ""
-	if version != "" {
-		right = Muted.Render("version " + version)
+	for _, info := range infoChoices {
+		if lipgloss.Width(left)+headerMinGap+lipgloss.Width(info) <= width {
+			right = Muted.Render(info)
+			break
+		}
 	}
-	if lipgloss.Width(left)+lipgloss.Width(right)+1 > width {
-		right = ""
+	line := Truncate(left, width)
+	if right != "" {
+		line = SpreadLine(width, left, right)
 	}
-
-	line := SpreadLine(width, left, right)
-	if HeaderHeight(height) < 2 {
-		return line
-	}
-	return line + "\n" + lipgloss.NewStyle().Foreground(ColorBorder).Render(strings.Repeat("─", MaxInt(0, width)))
+	return line + "\n" + headerRule(width, tabs, active)
 }
 
-func Footer(width int, keys help.KeyMap, status string) string {
+func headerRule(width int, tabs []string, active int) string {
 	if width <= 0 {
 		return ""
 	}
-	status = Truncate(status, width)
-	hintsWidth := width
-	if status != "" {
-		hintsWidth = width - lipgloss.Width(status) - 1
+	cells := tabCells(tabs)
+	if active < 0 || active >= len(cells) || cells[active].end+1 > width {
+		return Muted.Render(strings.Repeat(ruleLight, width))
 	}
+	cell := cells[active]
+	before := Muted.Render(strings.Repeat(ruleLight, MaxInt(0, cell.start-1)) + ruleHeavyStart)
+	heavy := Accent.Render(strings.Repeat(ruleHeavy, cell.end-cell.start))
+	after := Muted.Render(ruleHeavyFinish + strings.Repeat(ruleLight, MaxInt(0, width-cell.end-1)))
+	if cell.start == 0 {
+		before = ""
+	}
+	return before + heavy + after
+}
 
-	hints := ""
-	if keys != nil && hintsWidth > 0 {
-		helpModel := NewHelpModel()
-		helpModel.Width = hintsWidth
-		hints = Truncate(helpModel.ShortHelpView(keys.ShortHelp()), hintsWidth)
+func Hints(bindings []key.Binding) string {
+	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorAccent)
+	parts := make([]string, 0, len(bindings))
+	for _, binding := range bindings {
+		if !binding.Enabled() {
+			continue
+		}
+		hint := binding.Help()
+		part := keyStyle.Render(hint.Key)
+		if hint.Desc != "" {
+			part += " " + Muted.Render(hint.Desc)
+		}
+		parts = append(parts, part)
 	}
-	return SpreadLine(width, hints, status)
+	return strings.Join(parts, Muted.Render(hintSeparator))
+}
+
+func Footer(width int, left, status string) string {
+	if width <= 0 {
+		return ""
+	}
+	return SpreadLine(width, left, Truncate(status, width))
+}
+
+func FooterRoom(width int, status string) int {
+	if status == "" {
+		return width
+	}
+	return width - lipgloss.Width(status) - headerMinGap
 }
 
 func Pill(text string, tone Tone) string {
@@ -106,8 +175,9 @@ func TooSmall(width, height int) (string, bool) {
 	if width >= MinWidth && height >= MinHeight {
 		return "", false
 	}
-	message := fmt.Sprintf("Terminal too small: need %d×%d, have %d×%d", MinWidth, MinHeight, width, height)
-	lines := WrapPlain(message, MaxInt(1, width))
-	lines = append(lines, Truncate(Muted.Render("ctrl+c quit"), MaxInt(1, width)))
-	return strings.Join(lines, "\n"), true
+	width, height = MaxInt(1, width), MaxInt(1, height)
+	lines := WrapPlain(fmt.Sprintf("Terminal too small (need %dx%d)", MinWidth, MinHeight), width)
+	lines = append(lines, Muted.Render(Truncate(fmt.Sprintf("now %dx%d · q quit", width, height), width)))
+	block := lipgloss.NewStyle().Align(lipgloss.Center).Render(strings.Join(lines, "\n"))
+	return FitHeight(lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, block), height), true
 }

@@ -24,7 +24,6 @@ func TestRouterEscCancelsRunningCleanupAndShowsCanceledResult(t *testing.T) {
 
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
-	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	run.waitStarted(t)
 
 	d.send(tea.KeyMsg{Type: tea.KeyEsc})
@@ -45,7 +44,6 @@ func TestRouterEscCancelsRunningDiagnosticsAndShowsCanceledResult(t *testing.T) 
 	run := newBlockingRun()
 	d := newDriver(t, networkFeature(run))
 
-	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	d.selectNetworkAction("Checks connectivity, DNS resolution")
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	run.waitStarted(t)
@@ -64,7 +62,6 @@ func TestRouterCtrlCDuringRunCancelsAndQuitsOnlyAfterRunFinishes(t *testing.T) {
 	run := newBlockingRun()
 	d := newDriver(t, cleanerFeature(run.cleaner))
 
-	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	run.waitStarted(t)
@@ -86,7 +83,6 @@ func TestRouterSecondCtrlCQuitsWithoutWaitingForRun(t *testing.T) {
 
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
-	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	run.waitStarted(t)
 
 	d.send(tea.KeyMsg{Type: tea.KeyCtrlC})
@@ -99,7 +95,6 @@ func TestRouterEscAtCleanerPromptsReturnsToOptions(t *testing.T) {
 	run := newBlockingRun()
 	d := newDriver(t, cleanerFeature(run.cleaner))
 
-	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	d.send(tea.KeyMsg{Type: tea.KeyEsc})
 	if view := d.view(); !strings.Contains(view, "Options") || strings.Contains(view, "Choose cleanup mode") {
@@ -117,8 +112,7 @@ func TestRouterEscAtCleanerPromptsReturnsToOptions(t *testing.T) {
 func TestRouterTypesQIntoHostsField(t *testing.T) {
 	d := newDriver(t)
 
-	d.send(tea.KeyMsg{Type: tea.KeyDown})
-	d.send(tea.KeyMsg{Type: tea.KeyEnter})
+	d.send(key("2"))
 	d.selectNetworkAction("Prompts for domain and IP")
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	d.send(key("q"))
@@ -126,18 +120,6 @@ func TestRouterTypesQIntoHostsField(t *testing.T) {
 
 	if view := d.view(); d.quit || !strings.Contains(view, "Add a hosts entry") || !strings.Contains(view, "example.localq") {
 		t.Fatalf("expected q to be typed into the domain field:\n%s", view)
-	}
-}
-
-func TestRouterTypesQIntoMenuFilter(t *testing.T) {
-	d := newDriver(t)
-
-	d.send(key("/"))
-	d.send(key("q"))
-	d.pumpFor(20 * time.Millisecond)
-
-	if view := d.view(); d.quit || !strings.Contains(view, "Filter: q") {
-		t.Fatalf("expected q to be typed into the menu filter:\n%s", view)
 	}
 }
 
@@ -277,9 +259,8 @@ type modelFeature struct {
 	model func() tea.Model
 }
 
-func (f modelFeature) Title() string       { return f.title }
-func (f modelFeature) Description() string { return f.title }
-func (f modelFeature) Model() tea.Model    { return f.model() }
+func (f modelFeature) Title() string    { return f.title }
+func (f modelFeature) Model() tea.Model { return f.model() }
 
 func cleanerFeature(run views.CleanerRunFunc) ui.AppFeature {
 	return modelFeature{title: "Cleaner", model: func() tea.Model { return views.NewCleanerModelWithRunner(run) }}
@@ -294,8 +275,7 @@ func networkFeature(commands corenetwork.CommandRunner) ui.AppFeature {
 func TestRouterEscAtNetworkWriteConfirmationReturnsToActions(t *testing.T) {
 	d := newDriver(t)
 
-	d.send(tea.KeyMsg{Type: tea.KeyDown})
-	d.send(tea.KeyMsg{Type: tea.KeyEnter})
+	d.send(key("2"))
 	d.selectNetworkAction("Flushes OS DNS caches")
 	for _, cancel := range []tea.KeyMsg{{Type: tea.KeyEsc}, key("n")} {
 		d.send(tea.KeyMsg{Type: tea.KeyEnter})
