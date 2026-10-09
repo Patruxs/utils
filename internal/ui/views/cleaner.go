@@ -45,15 +45,16 @@ const (
 )
 
 type cleanerKeyMap struct {
-	Move        key.Binding
-	Select      key.Binding
-	Toggle      key.Binding
-	Continue    key.Binding
-	Run         key.Binding
-	Execute     key.Binding
-	ConfirmPrev key.Binding
-	ConfirmNext key.Binding
-	BackToMenu  key.Binding
+	Move         key.Binding
+	Select       key.Binding
+	Toggle       key.Binding
+	Continue     key.Binding
+	Run          key.Binding
+	Execute      key.Binding
+	ConfirmPrev  key.Binding
+	ConfirmNext  key.Binding
+	BackToMenu   key.Binding
+	CancelPrompt key.Binding
 }
 
 type cleanerContextualKeyMap struct {
@@ -134,6 +135,10 @@ func newCleanerKeyMap() cleanerKeyMap {
 			key.WithKeys("q", "esc"),
 			key.WithHelp("q/esc", "main menu"),
 		),
+		CancelPrompt: key.NewBinding(
+			key.WithKeys("n", "esc"),
+			key.WithHelp("n/esc", "back to options"),
+		),
 	}
 }
 
@@ -149,9 +154,9 @@ func (k cleanerContextualKeyMap) ShortHelp() []key.Binding {
 	case StateRunning:
 		return []key.Binding{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit}
 	case StateConfirmingExecute:
-		return []key.Binding{k.Move, k.Select, common.DefaultKeys.Yes, common.DefaultKeys.No}
+		return []key.Binding{k.Move, k.Select, common.DefaultKeys.Yes, k.CancelPrompt}
 	case StatePromptingMode:
-		return []key.Binding{k.Move, k.Select, k.Run, k.Execute, common.DefaultKeys.No}
+		return []key.Binding{k.Move, k.Select, k.Run, k.Execute, k.CancelPrompt}
 	case StateFinished:
 		return []key.Binding{common.DefaultKeys.ScrollLog, common.DefaultKeys.BackToList, k.BackToMenu}
 	default:
@@ -168,12 +173,12 @@ func (k cleanerContextualKeyMap) FullHelp() [][]key.Binding {
 	case StateConfirmingExecute:
 		return [][]key.Binding{
 			{k.Move, k.Select},
-			{common.DefaultKeys.Yes, common.DefaultKeys.No},
+			{common.DefaultKeys.Yes, k.CancelPrompt},
 		}
 	case StatePromptingMode:
 		return [][]key.Binding{
 			{k.Move, k.Select},
-			{k.Run, k.Execute, common.DefaultKeys.No},
+			{k.Run, k.Execute, k.CancelPrompt},
 		}
 	case StateFinished:
 		return [][]key.Binding{
@@ -513,7 +518,7 @@ func (m CleanerModel) updateExecuteConfirmation(msg tea.KeyMsg, cmds ...tea.Cmd)
 	case key.Matches(msg, common.DefaultKeys.Yes):
 		m.options.Execute = true
 		return m.startRun()
-	case key.Matches(msg, common.DefaultKeys.No):
+	case key.Matches(msg, m.keyMap.CancelPrompt):
 		m.state = StateSelectingOptions
 		return m, nil
 	case key.Matches(msg, common.DefaultKeys.Up, m.keyMap.ConfirmPrev):
@@ -545,7 +550,7 @@ func (m CleanerModel) updateModePrompt(msg tea.KeyMsg, cmds ...tea.Cmd) (tea.Mod
 		m.state = StateConfirmingExecute
 		m.confirmation = confirmationCancel
 		m.err = nil
-	case key.Matches(msg, common.DefaultKeys.No):
+	case key.Matches(msg, m.keyMap.CancelPrompt):
 		m.state = StateSelectingOptions
 	case key.Matches(msg, common.DefaultKeys.Up, m.keyMap.ConfirmPrev):
 		m.modeSelection = cleanupModeSelection(wrapIndex(int(m.modeSelection)-1, int(cleanupModeCount)))
@@ -631,7 +636,7 @@ func (m CleanerModel) Running() bool {
 }
 
 func (m CleanerModel) OwnsKeys() bool {
-	return m.Running()
+	return m.Running() || m.state == StatePromptingMode || m.state == StateConfirmingExecute
 }
 
 func (m *LogViewerModel) SetSize(width, height int) {

@@ -95,6 +95,25 @@ func TestRouterSecondCtrlCQuitsWithoutWaitingForRun(t *testing.T) {
 	close(run.release)
 }
 
+func TestRouterEscAtCleanerPromptsReturnsToOptions(t *testing.T) {
+	run := newBlockingRun()
+	d := newDriver(t, cleanerFeature(run.cleaner))
+
+	d.send(tea.KeyMsg{Type: tea.KeyEnter})
+	d.send(tea.KeyMsg{Type: tea.KeyEnter})
+	d.send(tea.KeyMsg{Type: tea.KeyEsc})
+	if view := d.view(); !strings.Contains(view, "Options") || strings.Contains(view, "Choose cleanup mode") {
+		t.Fatalf("expected esc at the mode prompt to return to the cleaner options:\n%s", view)
+	}
+
+	d.send(tea.KeyMsg{Type: tea.KeyEnter})
+	d.send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+	d.send(tea.KeyMsg{Type: tea.KeyEsc})
+	if view := d.view(); !strings.Contains(view, "Options") || strings.Contains(view, "Execute mode will delete") {
+		t.Fatalf("expected esc at the execute confirmation to return to the cleaner options:\n%s", view)
+	}
+}
+
 func TestRouterTypesQIntoHostsField(t *testing.T) {
 	d := newDriver(t)
 
