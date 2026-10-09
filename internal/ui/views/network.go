@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,7 +12,6 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -64,54 +64,58 @@ const (
 )
 
 type networkKeyMap struct {
-	Move       key.Binding
-	Select     key.Binding
-	AddEntry   key.Binding
-	Choose     key.Binding
-	Toggle     key.Binding
-	NextField  key.Binding
-	LeaveForm  key.Binding
-	BackToMenu key.Binding
+	Move          key.Binding
+	Toggle        key.Binding
+	Run           key.Binding
+	BackToMenu    key.Binding
+	NextField     key.Binding
+	AddEntry      key.Binding
+	LeaveForm     key.Binding
+	Choose        key.Binding
+	Select        key.Binding
+	Confirm       key.Binding
+	Cancel        key.Binding
+	Scroll        key.Binding
+	BackToActions key.Binding
 }
 
-type networkContextualKeyMap struct {
-	networkKeyMap
-	state networkViewState
+type networkFooterKeys []key.Binding
+
+func (k networkFooterKeys) ShortHelp() []key.Binding {
+	return k
+}
+
+func (k networkFooterKeys) FullHelp() [][]key.Binding {
+	return [][]key.Binding{k}
 }
 
 type NetworkModel struct {
 	spinner          spinner.Model
-	help             help.Model
 	keyMap           networkKeyMap
-	logViewer        NetworkLogViewerModel
+	logViewer        common.LogViewer
 	manager          corenetwork.NetworkManager
-	report           *corenetwork.Report
+	results          []networkActionResult
 	err              error
 	canceled         bool
 	cancelNetwork    context.CancelFunc
 	notice           string
-	layout           common.Layout
-	compactLevel     compactionLevel
-	actionRows       int
+	width            int
+	height           int
 	state            networkViewState
-	action           int
-	checkedActions   map[networkActionID]bool
+	actions          common.CheckboxListModel
 	persistentMode   bool
 	hostDomainInput  textinput.Model
 	hostIPInput      textinput.Model
 	focusedHostField int
+	hostsError       string
 	pendingRun       networkRunOptions
 	confirmRun       bool
-}
-
-type NetworkLogViewerModel struct {
-	viewport     viewport.Model
-	report       *corenetwork.Report
-	mouseFocused bool
+	running          []networkActionID
+	runStarted       time.Time
 }
 
 type networkFinishedMsg struct {
-	report   corenetwork.Report
+	results  []networkActionResult
 	err      error
 	canceled bool
 }
@@ -138,15 +142,21 @@ type networkRunOptions struct {
 var _ tea.Model = NetworkModel{}
 
 const (
-	networkTitle        = "Network & Diagnostics Manager"
-	networkSubtitle     = "Cross-platform network inspection, diagnostics, cache clearing, and per-command elevated configuration."
-	networkBaselineNote = "Read-only actions run as your user. Write actions show what they change and ask for confirmation first."
-	networkRunTimeout   = 2 * time.Minute
+	networkTitle       = "Network & Diagnostics Manager"
+	networkShortTitle  = "Network"
+	networkRunTimeout  = 2 * time.Minute
+	networkHostsIntro  = "Add a hosts entry. Blank IP defaults to 127.0.0.1."
+	networkCanceledRun = "Canceled; nothing was changed."
+	networkDefaultIP   = "127.0.0.1"
 
 	defaultNetworkLogViewportHeight = 12
-	networkActionsMinHeight         = 3
-	networkLogMinHeight             = 3
-	networkLogMaxHeight             = 20
+	networkWideMinWidth             = 100
+	networkDialogMaxWidth           = 100
+	networkNarrowCrumbWidth         = 60
+	networkListMinRows              = 3
+	networkDetailMaxRows            = 4
+	networkDetailTightRows          = 2
+	networkSessionMinListRows       = 8
 )
 
 const (
@@ -191,76 +201,63 @@ var networkActions = []networkActionItem{
 
 func newNetworkKeyMap() networkKeyMap {
 	return networkKeyMap{
-		Move: key.NewBinding(
-			key.WithKeys("up", "down", "k", "j"),
-			key.WithHelp("up/down:", "choose"),
-		),
-		Select: key.NewBinding(
-			key.WithKeys("enter"),
-			key.WithHelp("enter:", "run checked"),
-		),
-		AddEntry: key.NewBinding(
-			key.WithKeys("enter"),
-			key.WithHelp("enter:", "add entry"),
-		),
-		Choose: key.NewBinding(
-			key.WithKeys("enter"),
-			key.WithHelp("enter:", "apply choice"),
-		),
-		Toggle: key.NewBinding(
-			key.WithKeys(" "),
-			key.WithHelp("space:", "toggle"),
-		),
-		NextField: key.NewBinding(
-			key.WithKeys("tab"),
-			key.WithHelp("tab:", "next field"),
-		),
-		LeaveForm: key.NewBinding(
-			key.WithKeys("esc"),
-			key.WithHelp("esc:", "back"),
-		),
-		BackToMenu: key.NewBinding(
-			key.WithKeys("q", "esc"),
-			key.WithHelp("q/esc", "main menu"),
-		),
+		Move:          key.NewBinding(key.WithKeys("up", "down", "k", "j"), key.WithHelp("↑↓", "move")),
+		Toggle:        key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
+		Run:           key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "run")),
+		BackToMenu:    key.NewBinding(key.WithKeys("esc", "q"), key.WithHelp("esc", "menu")),
+		NextField:     key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next field")),
+		AddEntry:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "add entry")),
+		LeaveForm:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back")),
+		Choose:        key.NewBinding(key.WithKeys("left", "right", "up", "down", "tab", "h", "l", "k", "j"), key.WithHelp("←→", "choose")),
+		Select:        key.NewBinding(key.WithKeys("enter", " "), key.WithHelp("enter", "select")),
+		Confirm:       key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "confirm")),
+		Cancel:        key.NewBinding(key.WithKeys("n", "esc"), key.WithHelp("n/esc", "cancel")),
+		Scroll:        key.NewBinding(key.WithKeys("up", "down", "pgup", "pgdown"), key.WithHelp("↑↓", "scroll")),
+		BackToActions: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "actions")),
 	}
 }
 
-func (k networkKeyMap) contextual(state networkViewState) networkContextualKeyMap {
-	return networkContextualKeyMap{
-		networkKeyMap: k,
-		state:         state,
-	}
-}
-
-func (k networkContextualKeyMap) ShortHelp() []key.Binding {
-	switch k.state {
+func (m NetworkModel) FooterKeys() help.KeyMap {
+	k := m.keyMap
+	switch m.state {
 	case networkStateRunning:
-		return []key.Binding{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit}
+		return networkFooterKeys{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit}
 	case networkStateEditingHostsAdd:
-		return []key.Binding{k.NextField, k.AddEntry, k.LeaveForm}
+		return networkFooterKeys{k.NextField, k.AddEntry, k.LeaveForm}
 	case networkStateConfirmingWrite:
-		return []key.Binding{k.Move, k.Choose, common.DefaultKeys.Yes, common.DefaultKeys.No}
+		return networkFooterKeys{k.Choose, k.Select, k.Confirm, k.Cancel}
 	case networkStateFinished:
-		return []key.Binding{common.DefaultKeys.ScrollLog, common.DefaultKeys.BackToList, k.BackToMenu}
+		return networkFooterKeys{k.Scroll, k.BackToActions, k.BackToMenu}
 	default:
-		return []key.Binding{k.Move, k.Toggle, k.Select, k.BackToMenu}
+		return networkFooterKeys{k.Move, k.Toggle, k.Run, k.BackToMenu}
 	}
 }
 
-func (k networkContextualKeyMap) FullHelp() [][]key.Binding {
-	switch k.state {
-	case networkStateRunning:
-		return [][]key.Binding{{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit}}
-	case networkStateEditingHostsAdd:
-		return [][]key.Binding{{k.NextField, k.AddEntry, k.LeaveForm}}
+func (m NetworkModel) FooterStatus() string {
+	switch m.state {
 	case networkStateConfirmingWrite:
-		return [][]key.Binding{{k.Move, k.Choose, common.DefaultKeys.Yes, common.DefaultKeys.No}}
-	case networkStateFinished:
-		return [][]key.Binding{{common.DefaultKeys.ScrollLog, common.DefaultKeys.BackToList, k.BackToMenu}}
+		return common.Pill("WRITES", common.ToneDanger)
+	case networkStateRunning:
+		if runChangesSystem(m.running) {
+			return common.Pill("WRITES", common.ToneWarning)
+		}
+		return common.Muted.Render("read-only")
+	case networkStateSelectingOptions:
+		return m.listPosition()
 	default:
-		return [][]key.Binding{{k.Move, k.Toggle, k.Select, k.BackToMenu}}
+		return ""
 	}
+}
+
+func (m NetworkModel) Breadcrumb() []string {
+	title := networkTitle
+	if m.width > 0 && m.width < networkNarrowCrumbWidth {
+		title = networkShortTitle
+	}
+	if m.state == networkStateEditingHostsAdd {
+		return []string{title, actionTitle(networkActionHostsAdd)}
+	}
+	return []string{title}
 }
 
 func NewNetworkModel() NetworkModel {
@@ -270,69 +267,70 @@ func NewNetworkModel() NetworkModel {
 func NewNetworkModelWithManager(manager corenetwork.NetworkManager) NetworkModel {
 	domainInput := textinput.New()
 	domainInput.Placeholder = "example.local"
-	domainInput.Prompt = "domain: "
+	domainInput.Prompt = ""
 	domainInput.CharLimit = 253
-	domainInput.Width = 40
 	domainInput.SetValue("example.local")
 	domainInput.Focus()
 
 	ipInput := textinput.New()
-	ipInput.Placeholder = "127.0.0.1"
-	ipInput.Prompt = "ip:     "
+	ipInput.Placeholder = networkDefaultIP
+	ipInput.Prompt = ""
 	ipInput.CharLimit = 64
-	ipInput.Width = 40
-	ipInput.SetValue("127.0.0.1")
+	ipInput.SetValue(networkDefaultIP)
 	ipInput.Blur()
 
-	return NetworkModel{
+	model := NetworkModel{
 		spinner: spinner.New(
-			spinner.WithSpinner(spinner.Dot),
+			spinner.WithSpinner(trimmedSpinner(spinner.Dot)),
 			spinner.WithStyle(common.Accent),
 		),
-		help:            common.NewHelpModel(),
 		keyMap:          newNetworkKeyMap(),
-		logViewer:       NewNetworkLogViewerModel(),
+		logViewer:       common.NewLogViewer(),
 		manager:         manager,
-		layout:          common.NewLayout(0, 0),
-		checkedActions:  make(map[networkActionID]bool),
+		actions:         newNetworkActionList(),
 		hostDomainInput: domainInput,
 		hostIPInput:     ipInput,
 	}
-}
-
-func NewNetworkLogViewerModel() NetworkLogViewerModel {
-	logViewport := viewport.New(0, defaultNetworkLogViewportHeight)
-	logViewport.KeyMap = viewport.KeyMap{
-		Down: key.NewBinding(
-			key.WithKeys("down", "j"),
-			key.WithHelp("down/j", "scroll down"),
-		),
-		Up: key.NewBinding(
-			key.WithKeys("up", "k"),
-			key.WithHelp("up/k", "scroll up"),
-		),
-		PageDown: key.NewBinding(
-			key.WithKeys("pgdown", "d", "ctrl+d"),
-			key.WithHelp("pgdn/d", "scroll down"),
-		),
-		PageUp: key.NewBinding(
-			key.WithKeys("pgup", "u", "ctrl+u"),
-			key.WithHelp("pgup/u", "scroll up"),
-		),
-	}
-
-	return NetworkLogViewerModel{viewport: logViewport}
+	model.layoutComponents()
+	return model
 }
 
 func (m NetworkModel) Init() tea.Cmd {
 	return nil
 }
 
+func newNetworkActionList() common.CheckboxListModel {
+	items := make([]common.CheckboxItem, 0, len(networkActions))
+	for _, action := range networkActions {
+		item := common.CheckboxItem{ID: networkActionKey(action.id), Label: action.title, Group: action.group, Tag: "read-only", TagTone: common.ToneSubtle}
+		if !isReadOnlyNetworkAction(action.id) {
+			item.Tag, item.TagTone = "● writes", common.ToneWarning
+		}
+		items = append(items, item)
+	}
+	list := common.NewCheckboxList(items, 0, 0)
+	list.SetHideDetails(true)
+	list.SetFocused(true)
+	return list
+}
+
+func trimmedSpinner(base spinner.Spinner) spinner.Spinner {
+	frames := make([]string, len(base.Frames))
+	for index, frame := range base.Frames {
+		frames[index] = strings.TrimSpace(frame)
+	}
+	return spinner.Spinner{Frames: frames, FPS: base.FPS}
+}
+
+func networkActionKey(id networkActionID) string {
+	return strconv.Itoa(int(id))
+}
+
 func (m NetworkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
-	fitted := next.(NetworkModel)
-	fitted.fitToHeight()
-	return fitted, cmd
+	model := next.(NetworkModel)
+	model.layoutComponents()
+	return model, cmd
 }
 
 func (m NetworkModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -345,7 +343,8 @@ func (m NetworkModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.layout = common.NewLayout(msg.Width, msg.Height)
+		m.width = msg.Width
+		m.height = msg.Height
 		m.layoutComponents()
 	case networkFinishedMsg:
 		if m.cancelNetwork != nil {
@@ -353,12 +352,12 @@ func (m NetworkModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelNetwork = nil
 		}
 		m.state = networkStateFinished
-		m.report = &msg.report
+		m.results = msg.results
 		m.err = msg.err
 		m.canceled = msg.canceled
 		m.notice = ""
 		m.logViewer.SetMouseFocused(false)
-		m.logViewer.SetReport(msg.report)
+		m.logViewer.SetSections(networkLogSections(msg.results))
 		m.layoutComponents()
 		return m, nil
 	case tea.KeyMsg:
@@ -376,31 +375,30 @@ func (m NetworkModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.logViewer.IsKeyScrollInput(msg) {
 				var cmd tea.Cmd
 				m.logViewer, cmd = m.logViewer.Update(msg)
-				cmds = append(cmds, cmd)
-				return m, batch(cmds...)
+				return m, cmd
 			}
-			if key.Matches(msg, common.DefaultKeys.BackToList) {
+			if key.Matches(msg, m.keyMap.BackToActions) {
 				m.state = networkStateSelectingOptions
-				return m, nil
 			}
-			fallthrough
+			return m, nil
 		case networkStateSelectingOptions:
 			switch {
-			case key.Matches(msg, common.DefaultKeys.Up):
-				m.moveActions(-1)
-				return m, nil
-			case key.Matches(msg, common.DefaultKeys.Down):
-				m.moveActions(1)
-				return m, nil
-			case key.Matches(msg, common.DefaultKeys.Space):
-				m.toggleCurrentAction()
-				return m, nil
-			case key.Matches(msg, common.DefaultKeys.Enter):
+			case key.Matches(msg, common.DefaultKeys.Up, common.DefaultKeys.Down):
+				m.notice = ""
+				var cmd tea.Cmd
+				m.actions, cmd = m.actions.Update(msg)
+				return m, cmd
+			case key.Matches(msg, m.keyMap.Toggle):
+				var cmd tea.Cmd
+				m.actions, cmd = m.actions.ToggleSelected()
+				return m, cmd
+			case key.Matches(msg, m.keyMap.Run):
 				return m.startSelectedAction()
 			}
+			return m, nil
 		}
 	case tea.MouseMsg:
-		if m.state == networkStateFinished && m.report != nil {
+		if m.state == networkStateFinished {
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
 				m.logViewer.SetMouseFocused(m.mouseInLogViewer(msg))
 				return m, nil
@@ -408,195 +406,259 @@ func (m NetworkModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.logViewer.IsFocusedMouseScrollInput(msg) {
 				var cmd tea.Cmd
 				m.logViewer, cmd = m.logViewer.Update(msg)
-				cmds = append(cmds, cmd)
-				return m, batch(cmds...)
+				return m, cmd
 			}
-			return m, nil
 		}
-	}
-
-	if m.report != nil {
-		var cmd tea.Cmd
-		m.logViewer, cmd = m.logViewer.Update(msg)
-		cmds = append(cmds, cmd)
+		return m, nil
 	}
 
 	return m, batch(cmds...)
 }
 
-func (m NetworkModel) View() string {
-	var b strings.Builder
-	layout := m.layout
-
-	b.WriteString(layout.RenderWrapped(networkTitle, common.Title.Render))
-	b.WriteString("\n")
-	if m.compactLevel < compactWithoutSubtitle {
-		b.WriteString(layout.RenderWrapped(networkSubtitle, common.Muted.Render))
-		b.WriteString("\n")
+func (m NetworkModel) bodySize() (int, int) {
+	width, height := m.width, m.height
+	if width <= 0 {
+		width = common.DefaultContentWidth - 2*common.MarginX
 	}
-	b.WriteString("\n")
+	if height <= 0 {
+		height = common.DefaultContentHeight - common.HeaderHeight(common.DefaultContentHeight) - 1
+	}
+	return width, height
+}
 
+func (m NetworkModel) View() string {
+	width, height := m.bodySize()
+	notice := ""
+	if m.notice != "" {
+		notice = common.Notice(width, common.ToneWarning, m.notice)
+		height = common.MaxInt(1, height-lipgloss.Height(notice))
+	}
+
+	var body string
+	dialogWidth := common.MinInt(width, networkDialogMaxWidth)
 	switch m.state {
 	case networkStateRunning:
-		b.WriteString(layout.RenderWrapped(fmt.Sprintf("%s Running %s...", m.spinner.View(), m.currentAction().title), func(strs ...string) string {
-			return strings.Join(strs, "")
-		}))
-		b.WriteString("\n\n")
+		body = m.runningView(dialogWidth)
 	case networkStateEditingHostsAdd:
-		b.WriteString(layout.RenderWrapped("Add a hosts entry. Blank IP defaults to 127.0.0.1.", common.Muted.Render))
-		b.WriteString("\n\n")
-		b.WriteString(m.hostDomainInput.View())
-		b.WriteString("\n")
-		b.WriteString(m.hostIPInput.View())
-		b.WriteString("\n\n")
+		body = m.hostsFormView(dialogWidth)
 	case networkStateConfirmingWrite:
-		b.WriteString(layout.RenderWrapped("These actions change your system:", common.Error.Render))
-		b.WriteString("\n")
-		for _, change := range m.pendingChanges() {
-			b.WriteString(layout.RenderWrapped("- "+change, func(strs ...string) string {
-				return strings.Join(strs, "")
-			}))
-			b.WriteString("\n")
-		}
-		b.WriteString(layout.RenderWrapped(corenetwork.ElevationNote(), common.Muted.Render))
-		b.WriteString("\n\n")
-		b.WriteString(confirmationRow(!m.confirmRun, "Cancel"))
-		b.WriteString(confirmationRow(m.confirmRun, "Run these changes"))
-		b.WriteString("\n")
+		body = m.confirmView(dialogWidth)
+	case networkStateFinished:
+		body = m.resultView(width)
 	default:
-		if m.compactLevel < compactWithoutNotes {
-			b.WriteString(layout.RenderWrapped(networkBaselineNote+" "+corenetwork.ElevationNote(), common.Muted.Render))
-			b.WriteString("\n")
-		}
-		persistence := "off"
-		if m.persistentMode {
-			persistence = "on"
-		}
-		b.WriteString(layout.RenderWrapped("Persistent DNS mode for preset actions: "+persistence, common.Muted.Render))
-		b.WriteString("\n\n")
-		b.WriteString(fmt.Sprintf("Actions %d/%d  checked: %d\n", m.action+1, len(networkActions), len(m.selectedActionIDs())))
-		b.WriteString(m.renderActions())
-		b.WriteString("\n")
+		body = m.actionsView(width, height)
 	}
 
-	if m.notice != "" {
-		b.WriteString(layout.RenderWrapped(m.notice, common.Warning.Render))
-		b.WriteString("\n\n")
+	if notice == "" {
+		return body
 	}
-
-	if m.report != nil {
-		b.WriteString("\n")
-		b.WriteString(m.logViewer.View())
-	}
-
-	if m.canceled {
-		b.WriteString("\n")
-		b.WriteString(layout.RenderWrapped(runCanceledText, common.Warning.Render))
-		b.WriteString("\n")
-	} else if m.err != nil {
-		b.WriteString("\n")
-		b.WriteString(layout.RenderWrapped("Completed with errors: "+m.err.Error(), common.Error.Render))
-		b.WriteString("\n")
-	}
-
-	helpView := m.renderHelp()
-	if helpView != "" {
-		b.WriteString("\n")
-		b.WriteString(helpView)
-		b.WriteString("\n")
-	}
-
-	return b.String()
+	return common.FitHeight(body, height) + "\n" + notice
 }
 
 func (m *NetworkModel) layoutComponents() {
-	m.help.Width = m.layout.Width
-	width := common.MinInt(50, common.MaxInt(20, m.layout.Width-10))
-	m.hostDomainInput.Width = width
-	m.hostIPInput.Width = width
-	m.logViewer.SetSize(m.layout.Width, m.logViewer.viewport.Height)
+	width, height := m.bodySize()
+	if m.notice != "" {
+		height = common.MaxInt(1, height-lipgloss.Height(common.Notice(width, common.ToneWarning, m.notice)))
+	}
+	listWidth, listRows := m.actionListSize(width, height)
+	m.actions.SetSize(listWidth, listRows)
+	inputWidth := common.MaxInt(10, common.MinInt(width, networkDialogMaxWidth)-len("│ ▸ domain  ")-4)
+	m.hostDomainInput.Width = inputWidth
+	m.hostIPInput.Width = inputWidth
+	top := lipgloss.Height(m.resultSummary(width))
+	logHeight := common.MaxInt(1, height-top-2)
+	m.logViewer.SetSize(common.Panel{Width: width}.InnerWidth(), logHeight)
+	m.logViewer.SetSize(common.Panel{Width: width}.InnerWidth(), common.MaxInt(1, common.MinInt(logHeight, m.logViewer.TotalLines())))
 }
 
-func (m *NetworkModel) fitToHeight() {
-	logMinimumExtra := 0
-	if m.report != nil {
-		logMinimumExtra = networkLogMinHeight - 1
+func (m NetworkModel) actionsView(width, height int) string {
+	listWidth, _ := m.actionListSize(width, height)
+	actions := common.Panel{Title: "Actions", Meta: m.listPosition(), Variant: common.PanelFocused, Width: listWidth + 4}.Render(m.actions.View())
+	if width >= networkWideMinWidth {
+		rightWidth := width - listWidth - 4 - 1
+		detail := common.Panel{Title: m.currentAction().title, Width: rightWidth}.Render(strings.Join(m.actionDetailLines(rightWidth-4), "\n"))
+		session := common.Panel{Title: "Session", Width: rightWidth}.Render(strings.Join(m.sessionLines(rightWidth-4), "\n"))
+		right := detail
+		if lipgloss.Height(detail)+lipgloss.Height(session) <= height {
+			right += "\n" + session
+		}
+		return lipgloss.JoinHorizontal(lipgloss.Top, actions, " ", right)
 	}
 
-	for level := compactNone; level <= compactWithoutSubtitle; level++ {
-		probe := *m
-		probe.compactLevel = level
-		probe.actionRows = networkActionsMinHeight
-		probe.logViewer.viewport.Height = 1
-		spare := m.layout.Height - lipgloss.Height(probe.View()) - logMinimumExtra
-		if spare < 0 && level < compactWithoutSubtitle {
-			continue
-		}
-
-		spare = common.MaxInt(0, spare)
-		m.compactLevel = level
-		logHeight := networkLogMinHeight
-		if m.report != nil {
-			logHeight = common.MinInt(networkLogMaxHeight, networkLogMinHeight+spare/2)
-			spare -= logHeight - networkLogMinHeight
-		}
-		m.actionRows = common.MinInt(len(networkActions), networkActionsMinHeight+spare)
-		if m.report != nil {
-			spare -= m.actionRows - networkActionsMinHeight
-			m.logViewer.SetSize(m.layout.Width, common.MinInt(networkLogMaxHeight, logHeight+spare))
-		}
-		return
+	detailRows, sessionRows := m.narrowDetailRows(width, height)
+	rows := []string{actions}
+	detail := firstLines(m.actionDetailLines(width-4), detailRows)
+	rows = append(rows, common.Panel{Title: m.currentAction().title, Width: width}.Render(strings.Join(detail, "\n")))
+	if sessionRows > 0 {
+		rows = append(rows, common.Truncate(common.Muted.Render(m.persistentModeLine()), width))
 	}
+	return strings.Join(rows, "\n")
+}
+
+func (m NetworkModel) actionListSize(width, height int) (int, int) {
+	if width >= networkWideMinWidth {
+		return width*45/100 - 4, common.MaxInt(networkListMinRows, height-2)
+	}
+	detailRows, sessionRows := m.narrowDetailRows(width, height)
+	return width - 4, common.MaxInt(networkListMinRows, height-(detailRows+2)-sessionRows-2)
+}
+
+func (m NetworkModel) narrowDetailRows(width, height int) (int, int) {
+	detailRows := common.MinInt(len(m.actionDetailLines(width-4)), networkDetailMaxRows)
+	sessionRows := 1
+	listRows := func() int { return height - (detailRows + 2) - sessionRows - 2 }
+	if listRows() < networkSessionMinListRows {
+		sessionRows = 0
+	}
+	if listRows() < networkSessionMinListRows {
+		detailRows = common.MinInt(detailRows, networkDetailTightRows)
+	}
+	return detailRows, sessionRows
+}
+
+func (m NetworkModel) listPosition() string {
+	return fmt.Sprintf("%d/%d · %d checked", m.actionIndex()+1, len(networkActions), len(m.selectedActionIDs()))
+}
+
+func (m NetworkModel) actionDetailLines(width int) []string {
+	action := m.currentAction()
+	lines := []string{common.Muted.Render("read-only")}
+	if !isReadOnlyNetworkAction(action.id) {
+		lines = []string{common.Warning.Render("● writes system settings")}
+	}
+	for _, detail := range action.details {
+		lines = append(lines, common.WrapPlain(detail, width)...)
+	}
+	if !isReadOnlyNetworkAction(action.id) {
+		change := m.networkActionChange(action.id, corenetwork.HostsOptions{IP: "<ip>", Domain: "<domain>"})
+		lines = append(lines, common.WrapLine("Changes: ", change, width)...)
+	}
+	return lines
+}
+
+func (m NetworkModel) sessionLines(width int) []string {
+	lines := []string{m.persistentModeLine()}
+	for _, line := range common.WrapPlain(corenetwork.ElevationNote(), width) {
+		lines = append(lines, common.Muted.Render(line))
+	}
+	return lines
+}
+
+func (m NetworkModel) persistentModeLine() string {
+	if m.persistentMode {
+		return "Persistent DNS mode: on"
+	}
+	return "Persistent DNS mode: off"
+}
+
+func firstLines(lines []string, count int) []string {
+	if len(lines) <= count {
+		return lines
+	}
+	return lines[:count]
+}
+
+func (m NetworkModel) runningView(width int) string {
+	label := "Running: " + actionTitle(m.currentAction().id)
+	if len(m.running) == 1 {
+		label = "Running: " + actionTitle(m.running[0])
+	} else if len(m.running) > 1 {
+		label = fmt.Sprintf("Running %d actions", len(m.running))
+	}
+	note := "Read-only"
+	if runChangesSystem(m.running) {
+		note = "Writes system settings"
+	}
+	return common.RunStatus(width, m.spinner.View(), label, note, time.Since(m.runStarted))
+}
+
+func (m NetworkModel) hostsFormView(width int) string {
+	panel := common.Panel{Title: actionTitle(networkActionHostsAdd), Variant: common.PanelFocused, Width: width}
+	lines := []string{
+		common.Muted.Render(networkHostsIntro),
+		"",
+		hostsFieldRow(m.focusedHostField == 0, "domain", m.hostDomainInput.View()),
+		hostsFieldRow(m.focusedHostField == 1, "ip", m.hostIPInput.View()),
+	}
+	if m.hostsError != "" {
+		lines = append(lines, "")
+		lines = append(lines, common.WrapStyled(common.Error.Render(common.ToneDanger.Glyph()+" "+m.hostsError), panel.InnerWidth())...)
+	}
+	return panel.Render(strings.Join(lines, "\n"))
+}
+
+func hostsFieldRow(focused bool, label, input string) string {
+	cursor := "  "
+	label = fmt.Sprintf("%-6s", label)
+	if focused {
+		cursor = common.Accent.Render(common.ToneAccent.Glyph()) + " "
+		label = lipgloss.NewStyle().Bold(true).Render(label)
+	}
+	return cursor + label + "  " + input
+}
+
+func (m NetworkModel) confirmView(width int) string {
+	lines := []string{"These actions change your system:"}
+	for _, change := range m.pendingChanges() {
+		lines = append(lines, "• "+change)
+	}
+	lines = append(lines, common.Muted.Render(corenetwork.ElevationNote()))
+	selected := 0
+	if m.confirmRun {
+		selected = 1
+	}
+	return common.ConfirmDialog(width, "Change system settings", lines, []string{"Cancel", "Run these changes"}, selected)
+}
+
+func (m NetworkModel) resultSummary(width int) string {
+	operation := m.resultOperation()
+	summary := common.Success.Render(common.ToneSuccess.Glyph() + " " + operation + " finished")
+	switch {
+	case m.canceled:
+		summary = common.Warning.Render("⚠ Canceled: " + operation + " stopped early; the activity shows what ran")
+	case m.err != nil:
+		summary = common.Error.Render(common.ToneDanger.Glyph() + " Completed with errors: " + operation)
+	}
+
+	warnings, errorCount := networkProblemCounts(m.results)
+	counts := common.RenderCounts(width, []common.Count{
+		{Label: "warnings", N: warnings, Tone: common.ToneWarning},
+		{Label: "errors", N: errorCount, Tone: common.ToneDanger},
+	})
+	if lipgloss.Width(summary)+3+lipgloss.Width(counts) <= width {
+		return summary + common.Muted.Render(" · ") + counts
+	}
+	return strings.Join(append(common.WrapStyled(summary, width), counts), "\n")
+}
+
+func (m NetworkModel) resultOperation() string {
+	if len(m.results) == 1 {
+		return actionTitle(m.results[0].action)
+	}
+	return fmt.Sprintf("%d actions", len(m.results))
+}
+
+func (m NetworkModel) resultView(width int) string {
+	panel := common.Panel{Title: "Activity", Meta: m.logViewer.Position(), Width: width}
+	log := m.logViewer.View()
+	if log == "" {
+		log = lipgloss.NewStyle().Italic(true).Inherit(common.Muted).Render("No activity")
+	}
+	return m.resultSummary(width) + "\n" + panel.Render(log)
 }
 
 func (m NetworkModel) mouseInLogViewer(msg tea.MouseMsg) bool {
-	if m.report == nil {
-		return false
-	}
-
-	view := m.View()
-	index := strings.Index(view, "Recent activity\n")
-	if index < 0 {
-		return false
-	}
-
-	top := strings.Count(view[:index], "\n")
-	bottom := top + 1 + m.logViewer.viewport.Height
-	return msg.Y >= top && msg.Y <= bottom
-}
-
-func (m *NetworkModel) moveActions(delta int) {
-	if m.state != networkStateFinished {
-		m.state = networkStateSelectingOptions
-	}
-
-	m.action = wrapIndex(m.action+delta, len(networkActions))
-	m.notice = ""
-}
-
-func (m *NetworkModel) toggleCurrentAction() {
-	action := m.currentAction().id
-	if m.checkedActions == nil {
-		m.checkedActions = make(map[networkActionID]bool)
-	}
-	if m.checkedActions[action] {
-		delete(m.checkedActions, action)
-		return
-	}
-	m.checkedActions[action] = true
+	width, _ := m.bodySize()
+	top := lipgloss.Height(m.resultSummary(width))
+	return msg.Y > top && msg.Y <= top+m.logViewer.Height()
 }
 
 func (m NetworkModel) startSelectedAction() (tea.Model, tea.Cmd) {
-	actions := m.selectedActionIDs()
-	if len(actions) == 0 {
-		actions = []networkActionID{m.currentAction().id}
-	}
-
+	actions := m.selectedOrCurrentActionIDs()
 	if actionIDsContain(actions, networkActionHostsAdd) {
 		m.state = networkStateEditingHostsAdd
 		m.notice = ""
-		m.report = nil
-		m.err = nil
+		m.hostsError = ""
 		m.focusHostField(0)
 		return m, nil
 	}
@@ -605,27 +667,34 @@ func (m NetworkModel) startSelectedAction() (tea.Model, tea.Cmd) {
 }
 
 func (m NetworkModel) requestRun(options networkRunOptions) (tea.Model, tea.Cmd) {
-	for _, action := range options.actions {
-		if !isReadOnlyNetworkAction(action) {
-			m.state = networkStateConfirmingWrite
-			m.pendingRun = options
-			m.confirmRun = false
-			m.notice = ""
-			return m, nil
-		}
+	if runChangesSystem(options.actions) {
+		m.state = networkStateConfirmingWrite
+		m.pendingRun = options
+		m.confirmRun = false
+		m.notice = ""
+		return m, nil
 	}
 	return m.startRun(options)
 }
 
+func runChangesSystem(actions []networkActionID) bool {
+	for _, action := range actions {
+		if !isReadOnlyNetworkAction(action) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m NetworkModel) updateWriteConfirmation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, common.DefaultKeys.Yes):
+	case key.Matches(msg, m.keyMap.Confirm):
 		return m.startRun(m.pendingRun)
-	case key.Matches(msg, common.DefaultKeys.No, common.DefaultKeys.CancelRun):
+	case key.Matches(msg, m.keyMap.Cancel):
 		return m.cancelWriteConfirmation()
-	case key.Matches(msg, common.DefaultKeys.Up, common.DefaultKeys.Down):
+	case key.Matches(msg, m.keyMap.Choose):
 		m.confirmRun = !m.confirmRun
-	case key.Matches(msg, common.DefaultKeys.Enter, common.DefaultKeys.Space):
+	case key.Matches(msg, m.keyMap.Select):
 		if m.confirmRun {
 			return m.startRun(m.pendingRun)
 		}
@@ -637,7 +706,7 @@ func (m NetworkModel) updateWriteConfirmation(msg tea.KeyMsg) (tea.Model, tea.Cm
 func (m NetworkModel) cancelWriteConfirmation() (tea.Model, tea.Cmd) {
 	m.state = networkStateSelectingOptions
 	m.pendingRun = networkRunOptions{}
-	m.notice = "Canceled; nothing was changed."
+	m.notice = networkCanceledRun
 	return m, nil
 }
 
@@ -647,7 +716,7 @@ func (m NetworkModel) pendingChanges() []string {
 		if isReadOnlyNetworkAction(action) {
 			continue
 		}
-		changes = append(changes, actionTitle(action)+": "+m.networkActionChange(action))
+		changes = append(changes, actionTitle(action)+": "+m.networkActionChange(action, m.pendingRun.hosts))
 	}
 	return changes
 }
@@ -661,7 +730,7 @@ func isReadOnlyNetworkAction(action networkActionID) bool {
 	}
 }
 
-func (m NetworkModel) networkActionChange(action networkActionID) string {
+func (m NetworkModel) networkActionChange(action networkActionID, hosts corenetwork.HostsOptions) string {
 	hostsPath := corenetwork.HostsPath()
 	switch action {
 	case networkActionApplyConfig:
@@ -692,13 +761,23 @@ func (m NetworkModel) networkActionChange(action networkActionID) string {
 	case networkActionHostsBackup:
 		return fmt.Sprintf("copies %s to %s.backup-<time>.", hostsPath, hostsPath)
 	case networkActionHostsAdd:
-		return fmt.Sprintf("appends \"%s\t%s\t%s\" to %s.", m.pendingRun.hosts.IP, m.pendingRun.hosts.Domain, corenetwork.HostsManagedMarker, hostsPath)
+		return fmt.Sprintf("appends \"%s<TAB>%s<TAB>%s\" to %s.", hosts.IP, hosts.Domain, corenetwork.HostsManagedMarker, hostsPath)
 	case networkActionHostsRemoveCustom:
 		return fmt.Sprintf("removes lines tagged %s from %s; all other lines stay.", corenetwork.HostsManagedMarker, hostsPath)
 	case networkActionHostsRestore:
 		return fmt.Sprintf("saves %s as %s.before-restore-<time>, then overwrites it with the newest %s.backup-<time>.", hostsPath, hostsPath, hostsPath)
-	case networkActionBrowserChrome, networkActionBrowserFirefox, networkActionBrowserEdge, networkActionBrowserBrave, networkActionBrowserOpera, networkActionBrowserAll:
-		return "deletes the cache folders listed above for the current user."
+	case networkActionBrowserChrome:
+		return browserCacheChange("Chrome and Chromium")
+	case networkActionBrowserFirefox:
+		return browserCacheChange("Firefox")
+	case networkActionBrowserEdge:
+		return browserCacheChange("Edge")
+	case networkActionBrowserBrave:
+		return browserCacheChange("Brave")
+	case networkActionBrowserOpera:
+		return browserCacheChange("Opera")
+	case networkActionBrowserAll:
+		return browserCacheChange("Chrome, Chromium, Firefox, Edge, Brave and Opera")
 	case networkActionTogglePersistent:
 		if m.persistentMode {
 			return "turns persistent DNS mode off and deletes the saved DNS settings."
@@ -718,11 +797,16 @@ func dnsPresetChange(preset corenetwork.ConfigOptions) string {
 	return fmt.Sprintf("replaces the DNS servers of every active connection with %s and %s.", preset.DNSPrimary, preset.DNSSecondary)
 }
 
+func browserCacheChange(browsers string) string {
+	return "deletes the " + browsers + " cache folders of the current user."
+}
+
 func (m NetworkModel) updateHostsAddForm(msg tea.KeyMsg, cmds ...tea.Cmd) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keyMap.LeaveForm):
 		m.state = networkStateSelectingOptions
 		m.notice = ""
+		m.hostsError = ""
 		return m, nil
 	case key.Matches(msg, m.keyMap.NextField):
 		m.focusHostField((m.focusedHostField + 1) % 2)
@@ -733,20 +817,21 @@ func (m NetworkModel) updateHostsAddForm(msg tea.KeyMsg, cmds ...tea.Cmd) (tea.M
 	case key.Matches(msg, common.DefaultKeys.Down):
 		m.focusHostField(wrapIndex(m.focusedHostField+1, 2))
 		return m, nil
-	case key.Matches(msg, common.DefaultKeys.Enter):
+	case key.Matches(msg, m.keyMap.AddEntry):
 		domain := strings.TrimSpace(m.hostDomainInput.Value())
 		if domain == "" {
-			m.notice = "Enter a domain before adding a hosts entry."
+			m.hostsError = "Enter a domain before adding a hosts entry."
 			return m, nil
 		}
 		ip := strings.TrimSpace(m.hostIPInput.Value())
 		if ip == "" {
-			ip = "127.0.0.1"
+			ip = networkDefaultIP
 		}
 		if err := corenetwork.ValidateHostsEntry(ip, domain); err != nil {
-			m.notice = err.Error()
+			m.hostsError = err.Error()
 			return m, nil
 		}
+		m.hostsError = ""
 		return m.requestRun(networkRunOptions{
 			actions: m.selectedOrCurrentActionIDs(),
 			hosts: corenetwork.HostsOptions{
@@ -780,7 +865,7 @@ func (m *NetworkModel) focusHostField(index int) {
 
 func (m NetworkModel) startRun(options networkRunOptions) (tea.Model, tea.Cmd) {
 	m.state = networkStateRunning
-	m.report = nil
+	m.results = nil
 	m.err = nil
 	m.canceled = false
 	m.notice = ""
@@ -798,7 +883,11 @@ func (m NetworkModel) startRun(options networkRunOptions) (tea.Model, tea.Cmd) {
 	options.persistentMode = m.persistentMode
 	options.actions = actions
 	m.pendingRun = networkRunOptions{}
-	m.checkedActions = make(map[networkActionID]bool)
+	for _, action := range actions {
+		m.actions, _ = m.actions.SetChecked(networkActionKey(action), false)
+	}
+	m.running = actions
+	m.runStarted = time.Now()
 
 	ctx, cancel := context.WithTimeout(context.Background(), networkRunTimeout)
 	m.cancelNetwork = cancel
@@ -822,71 +911,24 @@ func (m NetworkModel) OwnsKeys() bool {
 	return m.Running() || m.state == networkStateEditingHostsAdd || m.state == networkStateConfirmingWrite
 }
 
-func (m NetworkModel) renderActions() string {
-	var b strings.Builder
-	width := m.layout.Width
-	if width <= 0 {
-		width = common.DefaultContentWidth
-	}
-
-	start, end := m.visibleActionRange()
-	if start > 0 {
-		b.WriteString(common.Muted.Render("  ... earlier actions"))
-		b.WriteString("\n")
-	}
-	for index := start; index < end; index++ {
-		action := networkActions[index]
-		selected := m.action == index
-		checked := m.checkedActions != nil && m.checkedActions[action.id]
-		b.WriteString(networkActionRow(selected, checked, action.title))
-		if selected && m.compactLevel < compactWithoutDetails {
-			for _, detail := range action.details {
-				for _, line := range common.WrapLine("      - ", detail, width) {
-					b.WriteString(common.Muted.Render(line))
-					b.WriteString("\n")
-				}
-			}
+func (m NetworkModel) actionIndex() int {
+	selected := m.actions.Selected().ID
+	for index, action := range networkActions {
+		if networkActionKey(action.id) == selected {
+			return index
 		}
 	}
-	if end < len(networkActions) {
-		b.WriteString(common.Muted.Render("  ... more actions"))
-		b.WriteString("\n")
-	}
-
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func (m NetworkModel) visibleActionRange() (int, int) {
-	rows := common.MinInt(common.MaxInt(networkActionsMinHeight, m.actionRows), len(networkActions))
-
-	start := m.action - rows/2
-	if start < 0 {
-		start = 0
-	}
-	end := start + rows
-	if end > len(networkActions) {
-		end = len(networkActions)
-		start = common.MaxInt(0, end-rows)
-	}
-	return start, end
+	return 0
 }
 
 func (m NetworkModel) currentAction() networkActionItem {
-	index := m.action
-	if index < 0 || index >= len(networkActions) {
-		return networkActions[0]
-	}
-	return networkActions[index]
+	return networkActions[m.actionIndex()]
 }
 
 func (m NetworkModel) selectedActionIDs() []networkActionID {
-	if len(m.checkedActions) == 0 {
-		return nil
-	}
-
-	actions := make([]networkActionID, 0, len(m.checkedActions))
+	var actions []networkActionID
 	for _, action := range networkActions {
-		if m.checkedActions[action.id] {
+		if m.actions.Checked(networkActionKey(action.id)) {
 			actions = append(actions, action.id)
 		}
 	}
@@ -901,166 +943,37 @@ func (m NetworkModel) selectedOrCurrentActionIDs() []networkActionID {
 	return []networkActionID{m.currentAction().id}
 }
 
-func (m NetworkModel) renderHelp() string {
-	return m.help.View(m.keyMap.contextual(m.state))
-}
-
-func (m *NetworkLogViewerModel) SetSize(width, height int) {
-	if width <= 0 {
-		width = common.DefaultContentWidth
-	}
-	if height <= 0 {
-		height = defaultNetworkLogViewportHeight
-	}
-
-	if width == m.viewport.Width && height == m.viewport.Height {
-		return
-	}
-
-	atBottom := m.viewport.AtBottom()
-	m.viewport.Width = width
-	m.viewport.Height = height
-	m.refreshContent()
-	if atBottom {
-		m.viewport.GotoBottom()
-	}
-}
-
-func (m *NetworkLogViewerModel) SetReport(report corenetwork.Report) {
-	m.report = &report
-	m.refreshContent()
-	m.viewport.GotoBottom()
-}
-
-func (m *NetworkLogViewerModel) SetMouseFocused(focused bool) {
-	m.mouseFocused = focused
-}
-
-func (m *NetworkLogViewerModel) refreshContent() {
-	if m.report == nil {
-		return
-	}
-
-	m.viewport.SetContent(renderNetworkActivity(*m.report, m.viewport.Width))
-}
-
-func (m NetworkLogViewerModel) Update(msg tea.Msg) (NetworkLogViewerModel, tea.Cmd) {
-	if m.report == nil {
-		return m, nil
-	}
-
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(msg)
-	return m, cmd
-}
-
-func (m NetworkLogViewerModel) IsKeyScrollInput(msg tea.KeyMsg) bool {
-	if m.report == nil {
-		return false
-	}
-
-	switch {
-	case key.Matches(msg, m.viewport.KeyMap.Up, m.viewport.KeyMap.PageUp, m.viewport.KeyMap.HalfPageUp):
-		return true
-	case key.Matches(msg, m.viewport.KeyMap.Down, m.viewport.KeyMap.PageDown, m.viewport.KeyMap.HalfPageDown):
-		return true
-	}
-
-	return false
-}
-
-func (m NetworkLogViewerModel) IsFocusedMouseScrollInput(msg tea.MouseMsg) bool {
-	if m.report == nil || !m.mouseFocused || !m.viewport.MouseWheelEnabled || msg.Action != tea.MouseActionPress {
-		return false
-	}
-
-	switch msg.Button {
-	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
-		return true
-	default:
-		return false
-	}
-}
-
-func (m NetworkLogViewerModel) View() string {
-	if m.report == nil {
-		return ""
-	}
-
-	var b strings.Builder
-	report := *m.report
-	width := m.viewport.Width
-	if width <= 0 {
-		width = common.DefaultContentWidth
-	}
-
-	b.WriteString(common.Success.Render("Last run"))
-	b.WriteString("\n")
-	for _, line := range common.WrapLine("  operation: ", report.Operation, width) {
-		b.WriteString(line)
-		b.WriteString("\n")
-	}
-	stats := fmt.Sprintf("warnings: %d  errors: %d", report.Warnings, report.Errors)
-	for _, line := range common.WrapLine("  ", stats, width) {
-		b.WriteString(line)
-		b.WriteString("\n")
-	}
-	b.WriteString("\n")
-	b.WriteString("Recent activity\n")
-	b.WriteString(m.viewport.View())
-
-	return b.String()
-}
-
 func runNetwork(ctx context.Context, manager corenetwork.NetworkManager, options networkRunOptions) tea.Cmd {
 	return func() tea.Msg {
-		report, err := runNetworkActions(ctx, manager, options)
+		results, err := runNetworkActions(ctx, manager, options)
 
 		return networkFinishedMsg{
-			report:   report,
+			results:  results,
 			err:      err,
 			canceled: runWasCanceled(ctx, err),
 		}
 	}
 }
 
-func runNetworkActions(ctx context.Context, manager corenetwork.NetworkManager, options networkRunOptions) (corenetwork.Report, error) {
+func runNetworkActions(ctx context.Context, manager corenetwork.NetworkManager, options networkRunOptions) ([]networkActionResult, error) {
 	actions := options.actions
 	if len(actions) == 0 {
 		actions = []networkActionID{networkActionViewConfig}
 	}
-	if len(actions) == 1 {
-		return runNetworkAction(ctx, manager, actions[0], options)
-	}
 
-	combined := corenetwork.Report{Operation: fmt.Sprintf("Batch Network Operations (%d selected)", len(actions))}
+	results := make([]networkActionResult, 0, len(actions))
 	var runErrors []error
-	for index, action := range actions {
-		actionReport, err := runNetworkAction(ctx, manager, action, options)
-		combined.Entries = append(combined.Entries, corenetwork.Entry{
-			Time:    time.Now(),
-			Level:   corenetwork.LevelInfo,
-			Message: fmt.Sprintf("Starting %d/%d: %s", index+1, len(actions), actionTitle(action)),
-		})
-		combined.Entries = append(combined.Entries, actionReport.Entries...)
-		combined.Warnings += actionReport.Warnings
-		combined.Errors += actionReport.Errors
+	for _, action := range actions {
+		report, err := runNetworkAction(ctx, manager, action, options)
+		results = append(results, networkActionResult{action: action, report: report, err: err})
 		if err != nil {
 			runErrors = append(runErrors, err)
-		}
-		if err != nil && !errors.Is(err, context.Canceled) {
-			combined.Errors++
-			combined.Entries = append(combined.Entries, corenetwork.Entry{
-				Time:    time.Now(),
-				Level:   corenetwork.LevelError,
-				Message: fmt.Sprintf("%s failed: %v", actionTitle(action), err),
-			})
 		}
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	return combined, errors.Join(runErrors...)
+	return results, errors.Join(runErrors...)
 }
 
 func runNetworkAction(ctx context.Context, manager corenetwork.NetworkManager, action networkActionID, options networkRunOptions) (corenetwork.Report, error) {
@@ -1151,52 +1064,77 @@ func actionTitle(id networkActionID) string {
 	return "Network action"
 }
 
-func renderNetworkActivity(report corenetwork.Report, width int) string {
-	if len(report.Entries) == 0 {
-		return common.Muted.Render("  No activity")
+func networkLogSections(results []networkActionResult) []common.LogSection {
+	var problems []common.LogLine
+	sections := make([]common.LogSection, 0, len(results)+1)
+	for index, result := range results {
+		section := common.LogSection{
+			ID:    fmt.Sprintf("action-%d", index),
+			Title: actionTitle(result.action),
+			Tone:  common.ToneAccent,
+		}
+		if len(results) > 1 {
+			section.Title = fmt.Sprintf("%d/%d %s", index+1, len(results), section.Title)
+		}
+		for _, line := range networkResultLines(result) {
+			section.Lines = append(section.Lines, line)
+			if line.Tone == common.ToneWarning || line.Tone == common.ToneDanger {
+				if len(results) > 1 {
+					line.Detail = actionTitle(result.action)
+				}
+				problems = append(problems, line)
+			}
+		}
+		sections = append(sections, section)
+	}
+	if len(problems) == 0 {
+		return sections
 	}
 
-	if width <= 0 {
-		width = common.DefaultContentWidth
-	}
-
-	var b strings.Builder
-	for _, entry := range report.Entries {
-		prefix := fmt.Sprintf("  [%s] ", entry.Level)
-		for _, line := range common.WrapLine(prefix, entry.Message, width) {
-			b.WriteString(styleNetworkActivityLine(entry.Level, line))
-			b.WriteString("\n")
+	problemTone := common.ToneWarning
+	for _, line := range problems {
+		if line.Tone == common.ToneDanger {
+			problemTone = common.ToneDanger
 		}
 	}
-
-	return strings.TrimRight(b.String(), "\n")
+	return append([]common.LogSection{{ID: "problems", Title: "PROBLEMS", Tone: problemTone, Lines: problems}}, sections...)
 }
 
-func styleNetworkActivityLine(level corenetwork.Level, line string) string {
+func networkResultLines(result networkActionResult) []common.LogLine {
+	lines := make([]common.LogLine, 0, len(result.report.Entries)+1)
+	for _, entry := range result.report.Entries {
+		lines = append(lines, common.LogLine{Tone: networkLevelTone(entry.Level), Text: entry.Message})
+	}
+	if result.err != nil && result.report.Errors == 0 && !errors.Is(result.err, context.Canceled) {
+		lines = append(lines, common.LogLine{Tone: common.ToneDanger, Text: fmt.Sprintf("%s failed: %v", actionTitle(result.action), result.err)})
+	}
+	return lines
+}
+
+func networkProblemCounts(results []networkActionResult) (int, int) {
+	warnings, errorCount := 0, 0
+	for _, result := range results {
+		for _, line := range networkResultLines(result) {
+			switch line.Tone {
+			case common.ToneWarning:
+				warnings++
+			case common.ToneDanger:
+				errorCount++
+			}
+		}
+	}
+	return warnings, errorCount
+}
+
+func networkLevelTone(level corenetwork.Level) common.Tone {
 	switch level {
 	case corenetwork.LevelWarn:
-		return common.Warning.Render(line)
+		return common.ToneWarning
 	case corenetwork.LevelError:
-		return common.Error.Render(line)
+		return common.ToneDanger
 	case corenetwork.LevelSuccess:
-		return common.Success.Render(line)
+		return common.ToneSuccess
 	default:
-		return common.Muted.Render(line)
+		return common.ToneNormal
 	}
-}
-
-func networkActionRow(selected bool, checked bool, label string) string {
-	cursor := " "
-	renderedLabel := label
-	if selected {
-		cursor = common.Selected.Render(">")
-		renderedLabel = common.Selected.Render(label)
-	}
-
-	marker := "[ ]"
-	if checked {
-		marker = common.Success.Render("[x]")
-	}
-
-	return fmt.Sprintf("  %s %s %s\n", cursor, marker, renderedLabel)
 }
