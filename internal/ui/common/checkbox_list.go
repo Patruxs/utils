@@ -29,7 +29,7 @@ func (i CheckboxItem) FilterValue() string {
 	return i.Label
 }
 
-const checkboxTagMinWidth = 60
+const checkboxLabelMinWidth = 12
 
 type CheckboxListModel struct {
 	list        list.Model
@@ -239,11 +239,13 @@ func (m CheckboxListModel) renderRow(row checkboxRow, width int) string {
 		marker = Success.Render("[x]")
 	}
 
+	prefix := cursor + marker + " "
 	tag := ""
-	if item.Tag != "" && width >= checkboxTagMinWidth {
+	labelRoom := width - lipgloss.Width(prefix) - lipgloss.Width(item.Tag) - 1
+	if item.Tag != "" && (labelRoom >= lipgloss.Width(item.Label) || labelRoom >= checkboxLabelMinWidth) {
 		tag = item.TagTone.Style().Render(item.Tag)
 	}
-	return SpreadLine(width, cursor+marker+" "+label, tag)
+	return SpreadLine(width, prefix+label, tag)
 }
 
 func (m *CheckboxListModel) SetSize(width, height int) {

@@ -58,17 +58,38 @@ func TestCheckboxListKeepsCursorInWindowAndCountsHiddenItems(t *testing.T) {
 	}
 }
 
-func TestCheckboxListRowsFitWidth(t *testing.T) {
-	for _, width := range []int{40, 80} {
-		model := NewCheckboxList(groupedCheckboxItems(6), width, 20)
+func TestCheckboxListRowsFitWidthAndKeepTagsBeforeLabelTails(t *testing.T) {
+	items := []CheckboxItem{
+		{ID: "short", Label: "View Current Network Config", Tag: "read-only"},
+		{ID: "long", Label: "Apply Network Config (DNS, DoH, MTU, IPv6, adapters)", Tag: "● writes", Checked: true},
+	}
+	for _, check := range []struct {
+		width                  int
+		shortRow, longRow      string
+		longKeepsTag, longCuts bool
+	}{
+		{width: 50, shortRow: "View Current Network Config", longKeepsTag: true, longCuts: true},
+		{width: 80, shortRow: "View Current Network Config", longKeepsTag: true},
+		{width: 24},
+	} {
+		model := NewCheckboxList(items, check.width, 10)
 		model.SetHideDetails(true)
 		model.SetFocused(true)
-		model, _ = model.SetChecked("item2", true)
+		rows := strings.Split(stripANSIForCheckboxTest(model.View()), "\n")
 
-		for _, row := range strings.Split(stripANSIForCheckboxTest(model.View()), "\n") {
-			if lipgloss.Width(row) > width {
-				t.Fatalf("expected rows <= %d columns, got %d: %q", width, lipgloss.Width(row), row)
+		for _, row := range rows {
+			if lipgloss.Width(row) > check.width {
+				t.Fatalf("width %d: expected rows <= %d columns, got %d: %q", check.width, check.width, lipgloss.Width(row), row)
 			}
+		}
+		if check.shortRow != "" && !(strings.Contains(rows[0], check.shortRow) && strings.HasSuffix(rows[0], "read-only")) {
+			t.Fatalf("width %d: a row that fits should keep its whole label and tag: %q", check.width, rows[0])
+		}
+		if keepsTag := strings.HasSuffix(rows[1], "● writes"); keepsTag != check.longKeepsTag {
+			t.Fatalf("width %d: long row keeps tag = %v, want %v: %q", check.width, keepsTag, check.longKeepsTag, rows[1])
+		}
+		if cuts := strings.Contains(rows[1], "…"); check.longKeepsTag && cuts != check.longCuts {
+			t.Fatalf("width %d: long row label cut = %v, want %v: %q", check.width, cuts, check.longCuts, rows[1])
 		}
 	}
 }
