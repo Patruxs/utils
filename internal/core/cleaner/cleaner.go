@@ -269,11 +269,17 @@ func (osFileSystem) Glob(pattern string) ([]string, error) {
 type execCommandRunner struct{}
 
 func (execCommandRunner) Output(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).Output()
+	return newCommand(ctx, name, args...).Output()
 }
 
 func (execCommandRunner) Run(ctx context.Context, name string, args ...string) error {
-	return exec.CommandContext(ctx, name, args...).Run()
+	return newCommand(ctx, name, args...).Run()
+}
+
+func newCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = commandWaitDelay
+	return cmd
 }
 
 func (r *Report) add(level Level, format string, args ...any) {

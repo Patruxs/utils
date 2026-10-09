@@ -1,9 +1,14 @@
 package cleaner
 
-import "os"
+import (
+	"os"
+	"time"
+)
 
 const (
 	osWindows = "windows"
+
+	commandWaitDelay = 3 * time.Second
 
 	userPrivateDirPerm  os.FileMode = 0o700
 	userPrivateFilePerm os.FileMode = 0o600
