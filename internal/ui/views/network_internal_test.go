@@ -47,7 +47,7 @@ func TestNetworkWriteActionAsksForConfirmationBeforeRunning(t *testing.T) {
 
 func TestNetworkEnterAfterRunDoesNotRepeatAction(t *testing.T) {
 	model := networkModelAt(networkActionDiagnostics)
-	next, _ := model.Update(networkFinishedMsg{report: corenetwork.Report{Operation: "Run Network Diagnostics"}})
+	next, _ := model.Update(networkFinishedMsg{results: []networkActionResult{{action: networkActionDiagnostics, report: corenetwork.Report{Operation: "Run Network Diagnostics"}}}})
 	model = next.(NetworkModel)
 
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})

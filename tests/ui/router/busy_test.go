@@ -54,7 +54,7 @@ func TestRouterEscCancelsRunningDiagnosticsAndShowsCanceledResult(t *testing.T) 
 	run.waitCanceled(t)
 	close(run.release)
 
-	d.pumpUntil(func() bool { return strings.Contains(d.view(), canceledText) })
+	d.pumpUntil(func() bool { return strings.Contains(d.view(), "Canceled") })
 	if view := d.view(); strings.Contains(view, "Completed with errors") {
 		t.Fatalf("expected canceled diagnostics to read as canceled:\n%s", view)
 	}
