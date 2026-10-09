@@ -40,19 +40,114 @@ var credentialManagerAllowlist = []string{
 	"antigravity",
 }
 
-func developerTargets(home string, fs FileSystem) []targetPath {
+func developerCredentialTargets(home string, fs FileSystem) []targetPath {
+	targets := []targetPath{}
+	for _, elems := range [][]string{
+		{".aws", "credentials"},
+		{".aws", "sso", "cache"},
+		{".aws", "cli", "cache"},
+		{".ansible", "galaxy_token"},
+		{".azure", "msal_token_cache.json"},
+		{".azure", "msal_token_cache.bin"},
+		{".azure", "accessTokens.json"},
+		{".azure", "service_principal_entries.json"},
+		{".vault-token"},
+		{".boto"},
+		{".fly", "config.yml"},
+		{".ngrok2", "ngrok.yml"},
+		{".config", "ngrok", "ngrok.yml"},
+		{".config", "stripe", "config.toml"},
+		{".config", "gcloud", "credentials.db"},
+		{".config", "gcloud", "access_tokens.db"},
+		{".config", "gcloud", "application_default_credentials.json"},
+		{".config", "gcloud", "legacy_credentials"},
+		{".config", "gh", "hosts.yml"},
+		{".config", "doctl", "config.yaml"},
+		{".config", "helm", "registry", "config.json"},
+		{".wrangler", "config", "default.toml"},
+		{".supabase", "access-token"},
+		{".oci"},
+		{".mc", "config.json"},
+		{".s3cfg"},
+		{".pulumi", "credentials.json"},
+		{".docker", "config.json"},
+		{".git-credentials"},
+		{".m2", "settings.xml"},
+		{".m2", "settings-security.xml"},
+		{".gradle", "gradle.properties"},
+		{".cargo", "credentials"},
+		{".cargo", "credentials.toml"},
+		{".kube", "config"},
+		{".kube", "cache"},
+		{".netrc"},
+		{".npmrc"},
+		{".pypirc"},
+		{".gem", "credentials"},
+		{".composer", "auth.json"},
+		{".nuget", "NuGet", "NuGet.Config"},
+		{".erlang.cookie"},
+		{".terraform.d", "credentials.tfrc.json"},
+	} {
+		targets = append(targets, targetPath{filepath.Join(append([]string{home}, elems...)...), targetLabelDeveloperCredential})
+	}
+
+	targets = append(targets,
+		targetPath{filepath.Join(home, ".codex", "auth.json"), targetLabelAIToolCredential},
+		targetPath{filepath.Join(home, ".claude", ".credentials.json"), targetLabelAIToolCredential},
+		targetPath{filepath.Join(home, ".gemini", "oauth_creds.json"), targetLabelAIToolCredential},
+	)
+
+	targets = append(targets,
+		targetPath{filepath.Join(home, ".config", "github-copilot", "hosts.json"), targetLabelCopilotCredential},
+		targetPath{filepath.Join(home, ".config", "github-copilot", "apps.json"), targetLabelCopilotCredential},
+	)
+
+	for _, dataDir := range vsCodeDataDirs(home, fs) {
+		targets = append(targets,
+			targetPath{filepath.Join(dataDir, "User", "globalStorage", "state.vscdb"), targetLabelIDECredential},
+			targetPath{filepath.Join(dataDir, "User", "globalStorage", "state.vscdb.backup"), targetLabelIDECredential},
+		)
+	}
+
+	if runtime.GOOS == osWindows {
+		targets = append(targets,
+			envTarget(fs, envAPPDATA, targetLabelDeveloperCredential, "gcloud", "credentials.db"),
+			envTarget(fs, envAPPDATA, targetLabelDeveloperCredential, "gcloud", "access_tokens.db"),
+			envTarget(fs, envAPPDATA, targetLabelDeveloperCredential, "gcloud", "application_default_credentials.json"),
+			envTarget(fs, envAPPDATA, targetLabelDeveloperCredential, "gcloud", "legacy_credentials"),
+			envTarget(fs, envAPPDATA, targetLabelDeveloperCredential, "GitHub CLI", "hosts.yml"),
+			envTarget(fs, envLOCALAPPDATA, targetLabelCopilotCredential, "github-copilot", "hosts.json"),
+			envTarget(fs, envLOCALAPPDATA, targetLabelCopilotCredential, "github-copilot", "apps.json"),
+			envTarget(fs, envLOCALAPPDATA, targetLabelIDECredential, ".IdentityService"),
+		)
+	}
+
+	return compactTargets(targets)
+}
+
+func vsCodeDataDirs(home string, fs FileSystem) []string {
+	products := []string{"Code", "Code - Insiders", "VSCodium"}
+	var dirs []string
+	for _, product := range products {
+		switch runtime.GOOS {
+		case osWindows:
+			dirs = append(dirs, envTarget(fs, envAPPDATA, "", product).path)
+		case "darwin":
+			dirs = append(dirs, filepath.Join(home, "Library", "Application Support", product))
+		default:
+			dirs = append(dirs, filepath.Join(home, ".config", product))
+		}
+	}
+	return dirs
+}
+
+func fullToolResetTargets(home string, fs FileSystem) []targetPath {
 	targets := []targetPath{
-		{filepath.Join(home, ".aws", "credentials"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".aws", "config"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".aws", "sso", "cache"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".aws", "cli", "cache"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".ansible"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".azure"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".vault-token"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".boto"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".vercel"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".fly"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".ngrok2", "ngrok.yml"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".config", "ngrok"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".config", "stripe"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".config", "gcloud"), targetLabelDeveloperConfig},
@@ -62,10 +157,7 @@ func developerTargets(home string, fs FileSystem) []targetPath {
 		{filepath.Join(home, ".wrangler"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".heroku"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".supabase"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".oci"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".mc"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".s3cfg"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".pulumi", "credentials.json"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".packer.d"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".vagrant.d"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".localstack"), targetLabelDeveloperConfig},
@@ -75,43 +167,25 @@ func developerTargets(home string, fs FileSystem) []targetPath {
 		{filepath.Join(home, ".cache", "pre-commit"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".sonarlint"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".rd"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".docker", "config.json"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".docker", "buildx"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".colima"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".lima"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".gitconfig"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".git-credentials"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".m2", "settings.xml"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".m2", "settings-security.xml"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".gradle", "gradle.properties"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".yarnrc"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".cargo", "credentials"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".cargo", "credentials.toml"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".bun"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".deno"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".kube", "config"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".kube", "cache"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".cache", "helm"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".config", "helm"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".minikube"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".config", "k9s"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".local", "state", "k9s"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".netrc"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".npmrc"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".pypirc"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".gem", "credentials"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".jupyter"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".composer", "auth.json"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".nuget", "NuGet", "NuGet.Config"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".erlang.cookie"), targetLabelDeveloperConfig},
-		{filepath.Join(home, ".terraform.d", "credentials.tfrc.json"), targetLabelDeveloperConfig},
 		{filepath.Join(home, ".codex"), targetLabelAITool},
 		{filepath.Join(home, ".config", "gemini"), targetLabelAITool},
 		{filepath.Join(home, ".gemini"), targetLabelAITool},
 		{filepath.Join(home, ".antigravity"), targetLabelAITool},
 		{filepath.Join(home, ".claude"), targetLabelAITool},
 	}
-
 	if runtime.GOOS == osWindows {
 		targets = append(targets,
 			envTarget(fs, envAPPDATA, targetLabelDeveloperConfig, "gcloud"),
@@ -131,7 +205,6 @@ func developerTargets(home string, fs FileSystem) []targetPath {
 func ideAndCopilotTargets(home string, fs FileSystem) []targetPath {
 	if runtime.GOOS == osWindows {
 		targets := []targetPath{
-			envTarget(fs, envLOCALAPPDATA, targetLabelIDEAuthCacheData, ".IdentityService"),
 			envTarget(fs, envAPPDATA, targetLabelIDEAuthCacheData, "Microsoft", "VisualStudio"),
 			envTarget(fs, envLOCALAPPDATA, targetLabelIDEAuthCacheData, "Microsoft", "VisualStudio"),
 			envTarget(fs, envLOCALAPPDATA, targetLabelIDEAuthCacheData, "Microsoft", "VSCommon"),

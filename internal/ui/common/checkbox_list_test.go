@@ -6,22 +6,6 @@ import (
 	"testing"
 )
 
-func TestCheckboxListAnyChecked(t *testing.T) {
-	model := NewCheckboxList([]CheckboxItem{
-		{ID: "one", Label: "One"},
-		{ID: "two", Label: "Two"},
-	}, 80, 2)
-
-	if model.AnyChecked() {
-		t.Fatal("new checkbox list should not have checked items")
-	}
-
-	model, _ = model.SetChecked("two", true)
-	if !model.AnyChecked() {
-		t.Fatal("expected AnyChecked to detect checked item")
-	}
-}
-
 func TestCheckboxListRendersFocusedAndCheckedDetails(t *testing.T) {
 	const width = 40
 	model := NewCheckboxList([]CheckboxItem{

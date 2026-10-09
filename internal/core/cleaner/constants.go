@@ -29,7 +29,11 @@ const (
 	envAPPDATA      = "APPDATA"
 	envLOCALAPPDATA = "LOCALAPPDATA"
 
-	targetLabelDeveloperConfig        = "developer credential/config"
+	targetLabelDeveloperCredential    = "developer credential"
+	targetLabelAIToolCredential       = "AI tool credential"
+	targetLabelIDECredential          = "IDE sign-in data"
+	targetLabelCopilotCredential      = "Copilot sign-in token"
+	targetLabelDeveloperConfig        = "developer tool folder/config"
 	targetLabelAITool                 = "AI tool credential/config/cache"
 	targetLabelIDEAuthCacheData       = "IDE authentication/cache/data"
 	targetLabelCopilotAuthCacheData   = "Copilot authentication/cache/data"

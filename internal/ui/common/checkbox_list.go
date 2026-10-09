@@ -148,17 +148,6 @@ func (m CheckboxListModel) Checked(id string) bool {
 	return false
 }
 
-func (m CheckboxListModel) AnyChecked() bool {
-	for _, item := range m.list.Items() {
-		checkboxItem, ok := item.(CheckboxItem)
-		if ok && checkboxItem.Checked {
-			return true
-		}
-	}
-
-	return false
-}
-
 func (m CheckboxListModel) AtStart() bool {
 	return m.list.Index() == 0
 }

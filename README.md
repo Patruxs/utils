@@ -11,18 +11,18 @@ The project is written in Go and builds into a single executable. After it is bu
 | Cleaner | System & Credential Cleaner | Dry-run-first local cleanup for developer machines. |
 | Cleaner | Dry-run mode | Shows what would be deleted without removing files. |
 | Cleaner | Execute mode | Deletes selected matching local files. |
-| Cleaner | Developer credentials/configs | Cleans local cloud, Git, Docker, Kubernetes, package-manager, and IaC credentials/configs. |
-| Cleaner | AI tool data | Cleans Codex, Gemini, Antigravity, and Claude local data. |
-| Cleaner | IDE data | Cleans Visual Studio, VS Code, VS Code Insiders, and VSCodium auth/cache/data/history. |
-| Cleaner | Copilot data | Cleans GitHub Copilot auth, config, cache, and extension data. |
+| Cleaner | Developer credentials | Cleans local cloud, Git, Docker, Kubernetes, package-manager, and IaC credential and token files. |
+| Cleaner | AI tool credentials | Cleans Codex, Claude, and Gemini sign-in files. |
+| Cleaner | IDE and Copilot sign-ins | Cleans VS Code, VS Code Insiders, VSCodium, Visual Studio, and GitHub Copilot sign-in data. |
+| Cleaner | Full tool reset | Optionally removes whole tool folders and settings: `.gitconfig`, cloud CLI folders, AI tool data, installed runtimes such as Bun and Deno, local VMs such as Lima, Colima, Minikube, and Vagrant, IDE data and history, and Copilot extensions. |
 | Cleaner | SSH cleanup | Optionally includes SSH config, known hosts, and key files. |
 | Cleaner | Shell/tool history | Cleans shell, REPL, database, debugger, and CLI history files. |
 | Cleaner | Browser cache cleanup | Cleans Chrome/Chromium, Edge, Brave, CocCoc, Firefox, and Safari caches where supported. |
 | Cleaner | Browser profile cleanup | Optionally removes browser sign-ins, cookies, sessions, passwords, extensions, storage, history, and bookmarks. |
 | Cleaner | Windows Credential Manager | Optionally deletes allowlisted developer credentials on Windows. |
-| Cleaner | Force-stop target apps | Optionally stops browsers, IDEs, and AI apps before cleanup. |
+| Cleaner | Force-stop target apps | Optionally stops browsers and IDEs before cleanup. |
 | Cleaner | Cleanup log | Writes a structured cleanup log under the current user profile. |
-| Cleaner | User-profile safety guard | Refuses to delete paths outside the current user profile. |
+| Cleaner | User-profile safety guard | Deletes only inside the current user profile, never through a link that leads outside it, and removes a symlinked file's link without touching its target. |
 | Network | Network & Diagnostics Manager | Inspects, diagnoses, cleans caches, and configures networking. |
 | Network | View current config | Shows adapter, DNS, IP, MTU, DoH, hosts, and ping information. |
 | Network | Diagnostics | Tests connectivity, DNS resolution, and ping quality. |

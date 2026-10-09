@@ -16,14 +16,14 @@ func TestDeveloperTargetsIncludeIDEAndCopilotData(t *testing.T) {
 		envLOCALAPPDATA: localAppData,
 	}
 
-	targets := developerTargets(home, fs)
+	targets := append(developerCredentialTargets(home, fs), fullToolResetTargets(home, fs)...)
 
 	switch runtime.GOOS {
 	case osWindows:
 		assertTarget(t, targets, filepath.Join(appData, "Code", "User", "globalStorage"), targetLabelIDEAuthCacheData)
 		assertTarget(t, targets, filepath.Join(appData, "Code", "Cache"), targetLabelIDEAuthCacheData)
 		assertTarget(t, targets, filepath.Join(appData, "Code - Insiders", "User", "workspaceStorage"), targetLabelIDEAuthCacheData)
-		assertTarget(t, targets, filepath.Join(localAppData, ".IdentityService"), targetLabelIDEAuthCacheData)
+		assertTarget(t, targets, filepath.Join(localAppData, ".IdentityService"), targetLabelIDECredential)
 		assertTarget(t, targets, filepath.Join(localAppData, "Microsoft", "VisualStudio"), targetLabelIDEAuthCacheData)
 		assertTarget(t, targets, filepath.Join(localAppData, "Microsoft", "VSCommon"), targetLabelIDEAuthCacheData)
 		assertTarget(t, targets, filepath.Join(appData, "GitHub Copilot"), targetLabelCopilotAuthCacheData)
@@ -101,8 +101,8 @@ func (fs envOnlyFS) ReadDir(string) ([]os.DirEntry, error) {
 	return nil, os.ErrNotExist
 }
 
-func (fs envOnlyFS) RemoveAll(string) error {
-	return nil
+func (fs envOnlyFS) OpenRoot(string) (*os.Root, error) {
+	return nil, os.ErrNotExist
 }
 
 func (fs envOnlyFS) WriteFile(string, []byte, os.FileMode) error {

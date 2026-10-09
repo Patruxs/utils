@@ -16,7 +16,7 @@ func TestCleanerViewRendersDefaultControls(t *testing.T) {
 	view := model.View()
 	for _, want := range []string{
 		"System & Credential Cleaner",
-		"Always included: dev credentials/configs",
+		"Always included:",
 		"[ ] Include browser profiles",
 		"Adds full Chrome, Edge, Brave",
 		"[ ] Clean Windows Credential Manager allowlist",
@@ -85,31 +85,17 @@ func TestCleanerViewTogglesOptionsWithArrowSelection(t *testing.T) {
 	}
 }
 
-func TestCleanerViewRequiresSelectedOptionBeforeCleanupPrompt(t *testing.T) {
+func TestCleanerViewOpensCleanupPromptWithBaselineOnly(t *testing.T) {
 	model := views.NewCleanerModel()
 
 	next, cmd := model.Update(specialKey(tea.KeyEnter))
 	if cmd != nil {
-		t.Fatal("enter with no selected options should not return a command")
+		t.Fatal("opening cleanup mode prompt should not return a command")
 	}
 	model = next.(views.CleanerModel)
 
-	view := model.View()
-	if strings.Contains(view, "Choose cleanup mode") || strings.Contains(view, "Running ") {
-		t.Fatalf("enter with no selected options should not open cleanup flow:\n%s", view)
-	}
-	if !strings.Contains(view, "Select at least one cleanup option") {
-		t.Fatalf("expected no-selection warning:\n%s", view)
-	}
-
-	next, cmd = model.Update(specialKey(tea.KeySpace))
-	if cmd != nil {
-		t.Fatal("selecting an option after warning should not return a command")
-	}
-	model = next.(views.CleanerModel)
-
-	if view := model.View(); strings.Contains(view, "Select at least one cleanup option") {
-		t.Fatalf("selecting an option should clear no-selection warning:\n%s", view)
+	if view := model.View(); !strings.Contains(view, "Choose cleanup mode") {
+		t.Fatalf("expected enter with no options to offer a baseline-only cleanup:\n%s", view)
 	}
 }
 
@@ -141,8 +127,6 @@ func TestCleanerViewExplainsForceStopOption(t *testing.T) {
 	view := stripANSI(model.View())
 	for _, want := range []string{
 		"[ ] Force stop running target processes",
-		"Stops running Chrome, Edge, Firefox, VS Code, Visual Studio, Claude,",
-		"and Codex before cleanup so locked auth/profile files can be handled",
 		"This happens in dry-run too",
 		"Dry-run still only logs file and",
 		"Credential Manager deletions",

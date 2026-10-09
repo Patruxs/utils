@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -29,6 +30,7 @@ const (
 type Options struct {
 	Execute                bool
 	CleanSSHKeys           bool
+	FullToolReset          bool
 	IncludeBrowserProfiles bool
 	CleanCredentialManager bool
 	ForceStopProcesses     bool
@@ -57,7 +59,7 @@ type FileSystem interface {
 	MkdirAll(path string, perm os.FileMode) error
 	Lstat(name string) (os.FileInfo, error)
 	ReadDir(name string) ([]os.DirEntry, error)
-	RemoveAll(path string) error
+	OpenRoot(dir string) (*os.Root, error)
 	WriteFile(name string, data []byte, perm os.FileMode) error
 	EvalSymlinks(path string) (string, error)
 	Glob(pattern string) ([]string, error)
@@ -94,6 +96,11 @@ func (c Cleaner) Run(ctx context.Context, opts Options) (Report, error) {
 		return Report{}, fmt.Errorf("resolve user home: %w", err)
 	}
 
+	realHome, err := c.fs.EvalSymlinks(home)
+	if err != nil {
+		return Report{}, fmt.Errorf("resolve user home: %w", err)
+	}
+
 	logPath, err := c.resolveLogPath(opts.LogPath, home)
 	if err != nil {
 		return Report{}, err
@@ -112,60 +119,92 @@ func (c Cleaner) Run(ctx context.Context, opts Options) (Report, error) {
 	}
 
 	var runErrors []error
-
-	if err := c.handleTargetProcesses(ctx, &report, opts.ForceStopProcesses); err != nil {
-		report.add(LevelWarn, "Could not handle running target processes: %v", err)
-		if opts.ForceStopProcesses {
+	clean := func(targets []targetPath) {
+		if err := c.cleanTargets(ctx, &report, realHome, targets, opts.Execute); err != nil {
 			runErrors = append(runErrors, err)
 		}
 	}
 
-	if err := c.cleanTargets(ctx, &report, home, developerTargets(home, c.fs), opts.Execute); err != nil {
-		runErrors = append(runErrors, err)
+	stopRun := func(err error) (Report, error) {
+		report.add(LevelWarn, "Cleanup stopped before finishing: %v. Remaining targets were not checked.", err)
+		return c.finishRun(report, append(runErrors, err))
 	}
 
-	if opts.CleanSSHKeys {
-		report.add(LevelWarn, "SSH key cleanup is enabled. This removes local private and public keys.")
-		if err := c.cleanTargets(ctx, &report, home, sshTargets(home, c.fs), opts.Execute); err != nil {
-			runErrors = append(runErrors, err)
-		}
-	} else {
-		report.add(LevelInfo, "SSH keys were not removed. Enable SSH key cleanup to remove local keys.")
-	}
-
-	if err := c.cleanTargets(ctx, &report, home, historyTargets(home, c.fs), opts.Execute); err != nil {
-		runErrors = append(runErrors, err)
-	}
-
-	if err := c.cleanTargets(ctx, &report, home, browserCacheTargets(home, c.fs), opts.Execute); err != nil {
-		runErrors = append(runErrors, err)
-	}
-
-	if opts.IncludeBrowserProfiles {
-		report.add(LevelWarn, "Browser profile cleanup is enabled. This removes local sign-ins and profile data.")
-		if err := c.cleanTargets(ctx, &report, home, browserProfileTargets(home, c.fs), opts.Execute); err != nil {
-			runErrors = append(runErrors, err)
-		}
-	} else {
-		report.add(LevelInfo, "Browser profiles were not removed. Enable browser profile cleanup to remove local cookies, sessions, passwords, extensions, local storage, history, and bookmarks.")
-	}
-
-	if opts.CleanCredentialManager {
-		if runtime.GOOS == osWindows {
+	stages := []func(){
+		func() {
+			if err := c.handleTargetProcesses(ctx, &report, opts.ForceStopProcesses); err != nil {
+				report.add(LevelWarn, "Could not handle running target processes: %v", err)
+				if opts.ForceStopProcesses {
+					runErrors = append(runErrors, err)
+				}
+			}
+		},
+		func() {
+			clean(developerCredentialTargets(home, c.fs))
+		},
+		func() {
+			if !opts.FullToolReset {
+				report.add(LevelInfo, "Full tool reset is off. Tool folders, tool configs, IDE data, and AI tool data were kept.")
+				return
+			}
+			report.add(LevelWarn, "Full tool reset is enabled. This removes whole tool folders, including installed runtimes, VMs, IDE data, and AI tool data.")
+			clean(fullToolResetTargets(home, c.fs))
+		},
+		func() {
+			if !opts.CleanSSHKeys {
+				report.add(LevelInfo, "SSH keys were not removed. Enable SSH key cleanup to remove local keys.")
+				return
+			}
+			report.add(LevelWarn, "SSH key cleanup is enabled. This removes local private and public keys.")
+			clean(sshTargets(home, c.fs))
+		},
+		func() {
+			clean(historyTargets(home, c.fs))
+		},
+		func() {
+			clean(browserCacheTargets(home, c.fs))
+		},
+		func() {
+			if !opts.IncludeBrowserProfiles {
+				report.add(LevelInfo, "Browser profiles were not removed. Enable browser profile cleanup to remove local cookies, sessions, passwords, extensions, local storage, history, and bookmarks.")
+				return
+			}
+			report.add(LevelWarn, "Browser profile cleanup is enabled. This removes local sign-ins and profile data.")
+			clean(browserProfileTargets(home, c.fs))
+		},
+		func() {
+			if !opts.CleanCredentialManager {
+				report.add(LevelInfo, "Windows Credential Manager was not changed. Enable Credential Manager cleanup to review or delete matching dev credentials.")
+				return
+			}
+			if runtime.GOOS != osWindows {
+				report.add(LevelSkip, "Windows Credential Manager cleanup is only available on Windows.")
+				return
+			}
 			report.add(LevelInfo, "Windows Credential Manager cleanup is enabled with a conservative allowlist.")
 			if err := c.cleanCredentialManager(ctx, &report, opts.Execute); err != nil {
 				runErrors = append(runErrors, err)
 			}
-		} else {
-			report.add(LevelSkip, "Windows Credential Manager cleanup is only available on Windows.")
+		},
+	}
+
+	for _, stage := range stages {
+		if err := ctx.Err(); err != nil {
+			return stopRun(err)
 		}
-	} else {
-		report.add(LevelInfo, "Windows Credential Manager was not changed. Enable Credential Manager cleanup to review or delete matching dev credentials.")
+		stage()
+	}
+
+	if err := ctx.Err(); err != nil {
+		return stopRun(err)
 	}
 
 	report.add(LevelInfo, "Local cleanup finished.")
 	report.add(LevelInfo, "Reminder: revoke remote sessions, PATs, SSH keys, API keys, and SSO sessions from their admin portals.")
+	return c.finishRun(report, runErrors)
+}
 
+func (c Cleaner) finishRun(report Report, runErrors []error) (Report, error) {
 	if report.LogPath != "" {
 		if err := c.writeLog(report.LogPath, report.Entries); err != nil {
 			runErrors = append(runErrors, fmt.Errorf("write cleanup log: %w", err))
@@ -207,8 +246,8 @@ func (osFileSystem) ReadDir(name string) ([]os.DirEntry, error) {
 	return os.ReadDir(name)
 }
 
-func (osFileSystem) RemoveAll(path string) error {
-	return os.RemoveAll(path)
+func (osFileSystem) OpenRoot(dir string) (*os.Root, error) {
+	return os.OpenRoot(dir)
 }
 
 func (osFileSystem) WriteFile(name string, data []byte, perm os.FileMode) error {
@@ -286,15 +325,35 @@ func (c Cleaner) resolveLogPath(path string, home string) (string, error) {
 }
 
 func (c Cleaner) cleanPath(ctx context.Context, report *Report, home string, path string, label string, execute bool) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	if strings.TrimSpace(path) == "" {
+	if ctx.Err() != nil || strings.TrimSpace(path) == "" {
 		return nil
 	}
 
-	info, err := c.fs.Lstat(path)
+	realParent, err := c.fs.EvalSymlinks(filepath.Dir(path))
+	if errors.Is(err, os.ErrNotExist) {
+		report.add(LevelSkip, "%s not found: %s", label, path)
+		return nil
+	}
+	if err != nil {
+		report.add(LevelError, "Could not resolve %s: %s: %v", label, path, err)
+		return fmt.Errorf("resolve %s %q: %w", label, path, err)
+	}
+
+	realPath := filepath.Join(realParent, filepath.Base(path))
+	rel, ok := pathInsideHome(home, realPath)
+	if !ok {
+		report.add(LevelSkip, "Refusing to touch %s outside current user profile: %s resolves to %s", label, path, realPath)
+		return nil
+	}
+
+	root, err := c.fs.OpenRoot(home)
+	if err != nil {
+		report.add(LevelError, "Could not open user profile for %s: %s: %v", label, path, err)
+		return fmt.Errorf("open user profile for %s %q: %w", label, path, err)
+	}
+	defer root.Close()
+
+	info, err := root.Lstat(rel)
 	if errors.Is(err, os.ErrNotExist) {
 		report.add(LevelSkip, "%s not found: %s", label, path)
 		return nil
@@ -304,37 +363,75 @@ func (c Cleaner) cleanPath(ctx context.Context, report *Report, home string, pat
 		return fmt.Errorf("inspect %s %q: %w", label, path, err)
 	}
 
-	resolvedPath, err := filepath.Abs(path)
-	if err != nil {
-		report.add(LevelError, "Could not resolve %s: %s: %v", label, path, err)
-		return fmt.Errorf("resolve %s %q: %w", label, path, err)
-	}
-
 	if info.Mode()&os.ModeSymlink != 0 {
-		resolvedPath, err = c.fs.EvalSymlinks(path)
-		if err != nil {
-			report.add(LevelError, "Could not resolve symlink for %s: %s: %v", label, path, err)
-			return fmt.Errorf("resolve symlink %s %q: %w", label, path, err)
-		}
-	}
-
-	if !isUnderUserHome(home, resolvedPath) {
-		report.add(LevelSkip, "Refusing to touch path outside current user profile: %s", resolvedPath)
-		return nil
+		return c.removeSymlink(report, root, rel, path, label, execute)
 	}
 
 	if !execute {
-		report.add(LevelDryRun, "Would delete %s: %s", label, resolvedPath)
+		report.add(LevelDryRun, "Would delete %s: %s", label, path)
 		return nil
 	}
 
-	if err := c.fs.RemoveAll(path); err != nil {
-		report.add(LevelError, "Could not delete %s: %s: %v", label, resolvedPath, err)
-		return fmt.Errorf("delete %s %q: %w", label, resolvedPath, err)
+	entriesBefore := 0
+	if info.IsDir() {
+		entriesBefore = countEntriesInside(root, rel)
 	}
 
-	report.add(LevelDelete, "Deleted %s: %s", label, resolvedPath)
+	if err := root.RemoveAll(rel); err != nil {
+		entriesLeft := countEntriesInside(root, rel)
+		if entriesLeft < entriesBefore {
+			report.add(LevelError, "Partly deleted %s: %s: removed %d of %d items inside, %d left: %v", label, path, entriesBefore-entriesLeft, entriesBefore, entriesLeft, err)
+			return fmt.Errorf("partly delete %s %q: %w", label, path, err)
+		}
+		report.add(LevelError, "Could not delete %s: %s: %v", label, path, err)
+		return fmt.Errorf("delete %s %q: %w", label, path, err)
+	}
+
+	report.add(LevelDelete, "Deleted %s: %s", label, path)
 	return nil
+}
+
+func (c Cleaner) removeSymlink(report *Report, root *os.Root, rel string, path string, label string, execute bool) error {
+	target, err := c.fs.EvalSymlinks(path)
+	if err != nil {
+		target, err = root.Readlink(rel)
+	}
+	if err != nil {
+		target = "unknown"
+	}
+
+	if !execute {
+		report.add(LevelDryRun, "Would remove symlink for %s: %s, target %s kept", label, path, target)
+		return nil
+	}
+
+	if err := root.Remove(rel); err != nil {
+		report.add(LevelError, "Could not remove symlink for %s: %s: %v", label, path, err)
+		return fmt.Errorf("remove symlink %s %q: %w", label, path, err)
+	}
+
+	report.add(LevelDelete, "Removed symlink for %s: %s, target %s kept", label, path, target)
+	return nil
+}
+
+func countEntriesInside(root *os.Root, rel string) int {
+	start := filepath.ToSlash(rel)
+	count := 0
+	fs.WalkDir(root.FS(), start, func(name string, _ fs.DirEntry, err error) error {
+		if err == nil && name != start {
+			count++
+		}
+		return nil
+	})
+	return count
+}
+
+func pathInsideHome(home string, path string) (string, bool) {
+	rel, err := filepath.Rel(home, path)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return rel, true
 }
 
 func (c Cleaner) cleanTargets(ctx context.Context, report *Report, home string, targets []targetPath, execute bool) error {
@@ -422,16 +519,12 @@ func (c Cleaner) handleTargetProcesses(ctx context.Context, report *Report, forc
 		"msedge":              {},
 		"msedge.exe":          {},
 		"microsoft edge":      {},
-		"claude":              {},
-		"claude.exe":          {},
 		"code":                {},
 		"code.exe":            {},
 		"code - insiders.exe": {},
 		"code-insiders":       {},
 		"codium":              {},
 		"codium.exe":          {},
-		"codex":               {},
-		"codex.exe":           {},
 		"devenv":              {},
 		"devenv.exe":          {},
 	}
@@ -461,6 +554,9 @@ func (c Cleaner) handleTargetProcesses(ctx context.Context, report *Report, forc
 
 	var runErrors []error
 	for _, name := range running {
+		if ctx.Err() != nil {
+			break
+		}
 		if err := c.stopProcess(ctx, name); err != nil {
 			report.add(LevelError, "Could not force stop target process %s: %v", name, err)
 			runErrors = append(runErrors, fmt.Errorf("force stop target process %q: %w", name, err))
@@ -490,9 +586,12 @@ func (c Cleaner) runningProcessNames(ctx context.Context) ([]string, error) {
 		return parseTasklistCSV(string(out)), nil
 	}
 
-	candidates := []string{"chrome", "google-chrome", "chromium", "firefox", "msedge", "claude", "Code", "Code.exe", "code-insiders", "codium", "codex", "devenv"}
+	candidates := []string{"chrome", "google-chrome", "chromium", "firefox", "msedge", "code", "code-insiders", "codium", "devenv"}
 	var running []string
 	for _, candidate := range candidates {
+		if ctx.Err() != nil {
+			break
+		}
 		if err := c.commands.Run(ctx, commandPgrep, commandArgExactProcess, candidate); err == nil {
 			running = append(running, candidate)
 		}
@@ -527,6 +626,9 @@ func (c Cleaner) cleanCredentialManager(ctx context.Context, report *Report, exe
 
 	var runErrors []error
 	for _, target := range parseCredentialManagerTargets(string(out)) {
+		if ctx.Err() != nil {
+			break
+		}
 		if !matchesCredentialAllowlist(target) {
 			continue
 		}

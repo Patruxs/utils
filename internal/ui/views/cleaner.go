@@ -253,10 +253,19 @@ func newCleanerOptionsList() common.CheckboxListModel {
 			ID:    optionForceStop,
 			Label: "Force stop running target processes",
 			Details: []string{
-				"Stops running Chrome, Edge, Firefox, VS Code, Visual Studio, Claude, and Codex before cleanup so locked auth/profile files can be handled.",
+				"Stops running Chrome, Edge, Firefox, VS Code, and Visual Studio before cleanup so locked auth/profile files can be handled.",
 				"This happens in dry-run too. Dry-run still only logs file and Credential Manager deletions.",
 			},
 			FilterText: "force stop kill running target processes browsers ides ai apps",
+		},
+		{
+			ID:    optionFullToolReset,
+			Label: "Full tool reset",
+			Details: []string{
+				"Adds whole tool folders and settings: .gitconfig, .aws/config, .claude, .codex, .gemini, .bun, .deno, .lima, .colima, .minikube, .vagrant.d, .jupyter, cloud CLI folders, IDE data, and Copilot extensions.",
+				"Execute removes installed runtimes, local VMs, tool settings, and IDE history and backups; dry-run only lists them.",
+			},
+			FilterText: "full tool reset folders settings runtimes vms ide ai",
 		},
 	}, 0, cleanerOptionsMinHeight)
 	optionsList.SelectByID(optionBrowserProfiles)
@@ -461,14 +470,6 @@ func (m *CleanerModel) moveOptions(delta int) {
 func (m CleanerModel) openModePrompt() (tea.Model, tea.Cmd) {
 	m.syncOptionsFromList()
 
-	if !m.hasSelectedOptions() {
-		if m.state != StateFinished {
-			m.state = StateSelectingOptions
-		}
-		m.notice = "Select at least one cleanup option before pressing enter."
-		return m, nil
-	}
-
 	m.state = StatePromptingMode
 	m.modeSelection = cleanupModeDryRun
 	m.err = nil
@@ -553,6 +554,7 @@ func (m *CleanerModel) syncOptionsFromList() {
 	m.options.IncludeBrowserProfiles = m.optionsList.Checked(optionBrowserProfiles)
 	m.options.CleanCredentialManager = m.optionsList.Checked(optionCredentialManager)
 	m.options.ForceStopProcesses = m.optionsList.Checked(optionForceStop)
+	m.options.FullToolReset = m.optionsList.Checked(optionFullToolReset)
 }
 
 func (m CleanerModel) syncedOptions() cleaner.Options {
@@ -561,11 +563,8 @@ func (m CleanerModel) syncedOptions() cleaner.Options {
 	options.IncludeBrowserProfiles = m.optionsList.Checked(optionBrowserProfiles)
 	options.CleanCredentialManager = m.optionsList.Checked(optionCredentialManager)
 	options.ForceStopProcesses = m.optionsList.Checked(optionForceStop)
+	options.FullToolReset = m.optionsList.Checked(optionFullToolReset)
 	return options
-}
-
-func (m CleanerModel) hasSelectedOptions() bool {
-	return m.optionsList.AnyChecked()
 }
 
 func (m CleanerModel) renderHelp() string {
@@ -573,12 +572,6 @@ func (m CleanerModel) renderHelp() string {
 }
 
 func (m CleanerModel) startRun() (tea.Model, tea.Cmd) {
-	if !m.hasSelectedOptions() {
-		m.state = StateSelectingOptions
-		m.notice = "Select at least one cleanup option before running cleanup."
-		return m, nil
-	}
-
 	m.state = StateRunning
 	m.report = nil
 	m.err = nil

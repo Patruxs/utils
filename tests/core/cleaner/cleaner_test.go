@@ -47,11 +47,15 @@ func TestRunDryRunKeepsExistingTargetsWithoutWritingDefaultLog(t *testing.T) {
 func TestRunExecuteDeletesExistingTargetsUnderFakeHome(t *testing.T) {
 	home := fakeHome(t)
 	target := filepath.Join(home, ".kube", "cache")
-	if err := os.MkdirAll(target, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(target, "token"), []byte("secret"), 0o600); err != nil {
-		t.Fatal(err)
+	codexAuth := filepath.Join(home, ".codex", "auth.json")
+	codexSessions := filepath.Join(home, ".codex", "sessions", "history.jsonl")
+	for _, file := range []string{filepath.Join(target, "token"), codexAuth, codexSessions} {
+		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte("secret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	report, err := cleaner.Run(context.Background(), cleaner.Options{Execute: true})
@@ -62,6 +66,19 @@ func TestRunExecuteDeletesExistingTargetsUnderFakeHome(t *testing.T) {
 	if _, err := os.Stat(target); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected target to be deleted, stat err=%v", err)
 	}
+	if _, err := os.Stat(codexAuth); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected baseline to delete the AI tool credential file, stat err=%v", err)
+	}
+	if _, err := os.Stat(codexSessions); err != nil {
+		t.Fatalf("expected baseline to keep the rest of the tool folder, stat err=%v", err)
+	}
+
+	if _, err := cleaner.Run(context.Background(), cleaner.Options{Execute: true, FullToolReset: true}); err != nil {
+		t.Fatalf("Run with full tool reset returned error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(codexAuth)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected full tool reset to delete the tool folder, stat err=%v", err)
+	}
 	if report.Deleted == 0 {
 		t.Fatalf("expected at least one delete entry, got %#v", report)
 	}
@@ -69,6 +86,98 @@ func TestRunExecuteDeletesExistingTargetsUnderFakeHome(t *testing.T) {
 		t.Fatalf("expected no default log path, got %q", report.LogPath)
 	}
 	assertNoDefaultCleanupLogs(t, home)
+}
+
+func TestRunExecuteRefusesTargetBehindLinkThatLeavesHome(t *testing.T) {
+	home := fakeHome(t)
+	outside := t.TempDir()
+	outsideToken := filepath.Join(outside, "gh", "hosts.yml")
+	if err := os.MkdirAll(filepath.Dir(outsideToken), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outsideToken, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(home, ".config")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	report, _ := cleaner.Run(context.Background(), cleaner.Options{Execute: true})
+
+	if _, err := os.Stat(outsideToken); err != nil {
+		t.Fatalf("expected file outside home to survive, stat err=%v", err)
+	}
+	if !hasEntry(report, cleaner.LevelSkip, outside) {
+		t.Fatalf("expected a SKIP entry naming %q, got %#v", outside, report.Entries)
+	}
+}
+
+func TestRunExecuteRemovesSymlinkAndReportsTargetKept(t *testing.T) {
+	realHome := fakeHome(t)
+	linkedHome := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(realHome, linkedHome); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv("HOME", linkedHome)
+	t.Setenv("USERPROFILE", linkedHome)
+
+	dotfile := filepath.Join(realHome, "dotfiles", "npmrc")
+	if err := os.MkdirAll(filepath.Dir(dotfile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dotfile, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(realHome, ".npmrc")
+	if err := os.Symlink(dotfile, link); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := cleaner.Run(context.Background(), cleaner.Options{Execute: true})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+
+	if _, err := os.Lstat(link); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected symlink to be removed, lstat err=%v", err)
+	}
+	if _, err := os.Stat(dotfile); err != nil {
+		t.Fatalf("expected symlink target to be kept, stat err=%v", err)
+	}
+	if !hasEntry(report, cleaner.LevelDelete, "symlink") || !hasEntry(report, cleaner.LevelDelete, dotfile) {
+		t.Fatalf("expected a delete entry naming the symlink and its kept target, got %#v", report.Entries)
+	}
+}
+
+func TestRunExecuteReportsPartialDeletion(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs POSIX directory permissions enforced for the current user")
+	}
+	home := fakeHome(t)
+	cache := filepath.Join(home, ".aws", "sso", "cache")
+	token := filepath.Join(cache, "token.json")
+	if err := os.MkdirAll(cache, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(token, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(cache), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(filepath.Dir(cache), 0o700) })
+
+	report, err := cleaner.Run(context.Background(), cleaner.Options{Execute: true})
+	if err == nil {
+		t.Fatal("expected Run to return the removal error")
+	}
+
+	if _, err := os.Stat(token); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected the file inside to be removed, stat err=%v", err)
+	}
+	if !hasEntry(report, cleaner.LevelError, "Partly deleted") || hasEntry(report, cleaner.LevelError, "Could not delete") {
+		t.Fatalf("expected the failure to be reported as partial, got %#v", report.Entries)
+	}
 }
 
 func TestRunRejectsLogPathOutsideUserHome(t *testing.T) {
@@ -102,7 +211,7 @@ func TestRunHonorsCustomLogPathUnderUserHome(t *testing.T) {
 	assertLogContains(t, logPath, "Local cleanup finished.")
 }
 
-func TestRunHonorsCanceledContext(t *testing.T) {
+func TestRunStopsBetweenStagesWhenCanceled(t *testing.T) {
 	home := fakeHome(t)
 	target := filepath.Join(home, ".npmrc")
 	if err := os.WriteFile(target, []byte("secret"), 0o600); err != nil {
@@ -110,14 +219,32 @@ func TestRunHonorsCanceledContext(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	defer cancel()
+	commands := newFakeProcessCommandRunner()
+	commands.onFirstCall = cancel
 
-	_, err := cleaner.Run(ctx, cleaner.Options{Execute: true})
+	report, err := cleaner.NewCleaner(nil, commands).Run(ctx, cleaner.Options{Execute: true})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
+	if n := strings.Count(err.Error(), context.Canceled.Error()); n != 1 {
+		t.Fatalf("expected the cancel error once, got %d times: %v", n, err)
+	}
 	if _, err := os.Stat(target); err != nil {
 		t.Fatalf("expected canceled cleanup to leave target: %v", err)
+	}
+
+	canceledEntries := 0
+	for _, entry := range report.Entries {
+		if strings.Contains(entry.Message, context.Canceled.Error()) {
+			canceledEntries++
+		}
+		if entry.Message == "Local cleanup finished." {
+			t.Fatalf("canceled cleanup should not report finishing, got %#v", report.Entries)
+		}
+	}
+	if canceledEntries != 1 {
+		t.Fatalf("expected one canceled entry, got %d in %#v", canceledEntries, report.Entries)
 	}
 }
 
@@ -160,11 +287,13 @@ func TestRunForceStopsTargetProcessesWhenOptedIn(t *testing.T) {
 	}
 
 	if runtime.GOOS == "windows" {
-		assertCommandCalled(t, commands.killCommands, "taskkill", "/F", "/IM", "Codex.exe")
+		assertCommandCalled(t, commands.killCommands, "taskkill", "/F", "/IM", "Code.exe")
+		assertCommandNotCalled(t, commands.killCommands, "taskkill", "/F", "/IM", "Codex.exe")
 		return
 	}
 
-	assertCommandCalled(t, commands.killCommands, "pkill", "-x", "claude")
+	assertCommandCalled(t, commands.killCommands, "pkill", "-x", "code")
+	assertCommandNotCalled(t, commands.killCommands, "pkill", "-x", "claude")
 }
 
 func TestRunLogsTargetsInStableOrder(t *testing.T) {
@@ -212,20 +341,18 @@ func (jitterFileSystem) MkdirAll(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
 
-func (jitterFileSystem) Lstat(name string) (os.FileInfo, error) {
-	time.Sleep(rand.N(2 * time.Millisecond))
-	return os.Lstat(name)
-}
+func (jitterFileSystem) Lstat(name string) (os.FileInfo, error) { return os.Lstat(name) }
 
 func (jitterFileSystem) ReadDir(name string) ([]os.DirEntry, error) { return os.ReadDir(name) }
 
-func (jitterFileSystem) RemoveAll(path string) error { return os.RemoveAll(path) }
+func (jitterFileSystem) OpenRoot(dir string) (*os.Root, error) { return os.OpenRoot(dir) }
 
 func (jitterFileSystem) WriteFile(name string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(name, data, perm)
 }
 
 func (jitterFileSystem) EvalSymlinks(path string) (string, error) {
+	time.Sleep(rand.N(2 * time.Millisecond))
 	return filepath.EvalSymlinks(path)
 }
 
@@ -233,6 +360,14 @@ func (jitterFileSystem) Glob(pattern string) ([]string, error) { return filepath
 
 type fakeProcessCommandRunner struct {
 	killCommands [][]string
+	onFirstCall  func()
+}
+
+func (r *fakeProcessCommandRunner) noteCall() {
+	if r.onFirstCall != nil {
+		r.onFirstCall()
+		r.onFirstCall = nil
+	}
 }
 
 func newFakeProcessCommandRunner() *fakeProcessCommandRunner {
@@ -240,17 +375,19 @@ func newFakeProcessCommandRunner() *fakeProcessCommandRunner {
 }
 
 func (r *fakeProcessCommandRunner) Output(_ context.Context, name string, args ...string) ([]byte, error) {
+	r.noteCall()
 	if name == "tasklist.exe" {
-		return []byte("\"Codex.exe\",\"1234\",\"Console\",\"1\",\"10,000 K\"\n"), nil
+		return []byte("\"Codex.exe\",\"1234\",\"Console\",\"1\",\"10,000 K\"\n\"Code.exe\",\"5678\",\"Console\",\"1\",\"10,000 K\"\n"), nil
 	}
 	return nil, nil
 }
 
 func (r *fakeProcessCommandRunner) Run(_ context.Context, name string, args ...string) error {
+	r.noteCall()
 	command := append([]string{name}, args...)
 	switch name {
 	case "pgrep":
-		if len(args) == 2 && args[0] == "-x" && args[1] == "claude" {
+		if len(args) == 2 && args[0] == "-x" && (args[1] == "claude" || args[1] == "code") {
 			return nil
 		}
 		return errors.New("process not found")
@@ -260,6 +397,15 @@ func (r *fakeProcessCommandRunner) Run(_ context.Context, name string, args ...s
 	default:
 		return nil
 	}
+}
+
+func hasEntry(report cleaner.Report, level cleaner.Level, text string) bool {
+	for _, entry := range report.Entries {
+		if entry.Level == level && strings.Contains(entry.Message, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func assertLogContains(t *testing.T, path string, want string) {
@@ -296,4 +442,14 @@ func assertCommandCalled(t *testing.T, commands [][]string, want ...string) {
 	}
 
 	t.Fatalf("expected command %#v, got %#v", want, commands)
+}
+
+func assertCommandNotCalled(t *testing.T, commands [][]string, unwanted ...string) {
+	t.Helper()
+
+	for _, command := range commands {
+		if strings.Join(command, "\x00") == strings.Join(unwanted, "\x00") {
+			t.Fatalf("expected command %#v not to be called, got %#v", unwanted, commands)
+		}
+	}
 }
