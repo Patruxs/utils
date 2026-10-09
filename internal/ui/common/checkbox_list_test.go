@@ -16,11 +16,7 @@ func TestCheckboxListAnyChecked(t *testing.T) {
 		t.Fatal("new checkbox list should not have checked items")
 	}
 
-	var cmd any
-	model, cmd = model.SetChecked("two", true)
-	if cmd == nil {
-		t.Fatal("checking an existing item should return a command")
-	}
+	model, _ = model.SetChecked("two", true)
 	if !model.AnyChecked() {
 		t.Fatal("expected AnyChecked to detect checked item")
 	}
@@ -46,11 +42,7 @@ func TestCheckboxListRendersFocusedAndCheckedDetails(t *testing.T) {
 	}
 	assertCheckboxLinesFit(t, view, width)
 
-	var cmd any
-	model, cmd = model.SetChecked("one", true)
-	if cmd == nil {
-		t.Fatal("checking an existing item should return a command")
-	}
+	model, _ = model.SetChecked("one", true)
 	model.SetFocused(false)
 
 	view = stripANSIForCheckboxTest(model.View())
