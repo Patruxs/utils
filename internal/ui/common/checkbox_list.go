@@ -26,10 +26,11 @@ func (i CheckboxItem) FilterValue() string {
 }
 
 type CheckboxListModel struct {
-	list    list.Model
-	focused bool
-	width   int
-	height  int
+	list        list.Model
+	focused     bool
+	hideDetails bool
+	width       int
+	height      int
 }
 
 func NewCheckboxList(items []CheckboxItem, width, height int) CheckboxListModel {
@@ -82,7 +83,7 @@ func (m CheckboxListModel) View() string {
 
 		selected := m.focused && index == m.list.Index()
 		lines = append(lines, renderCheckboxItem(checkboxItem, width, selected)...)
-		if shouldRenderCheckboxDetails(checkboxItem, selected) {
+		if !m.hideDetails && shouldRenderCheckboxDetails(checkboxItem, selected) {
 			lines = append(lines, renderCheckboxDetails(checkboxItem.Details, width)...)
 		}
 	}
@@ -97,6 +98,10 @@ func (m *CheckboxListModel) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 	m.list.SetSize(width, height)
+}
+
+func (m *CheckboxListModel) SetHideDetails(hide bool) {
+	m.hideDetails = hide
 }
 
 func (m *CheckboxListModel) SetFocused(focused bool) {

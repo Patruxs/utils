@@ -79,7 +79,7 @@ func TestCleanerFinishedViewScrollsRecentActivityWithArrowKeys(t *testing.T) {
 	model = next.(CleanerModel)
 
 	after := stripANSIForCleanerTest(model.View())
-	if !strings.Contains(after, "activity 14") || strings.Contains(after, "activity 19") {
+	if !strings.Contains(after, "activity 18") || strings.Contains(after, "activity 19") {
 		t.Fatalf("expected up arrow to scroll recent activity instead of changing options:\n%s", after)
 	}
 }
@@ -109,7 +109,7 @@ func TestCleanerFinishedViewRequiresClickBeforeMouseWheelScroll(t *testing.T) {
 		t.Fatal("unfocused mouse wheel should not return a command")
 	}
 	model = next.(CleanerModel)
-	if view := stripANSIForCleanerTest(model.View()); !strings.Contains(view, "activity 19") || strings.Contains(view, "activity 12") {
+	if view := stripANSIForCleanerTest(model.View()); !strings.Contains(view, "activity 19") {
 		t.Fatalf("mouse wheel should not scroll before clicking recent activity:\n%s", view)
 	}
 
@@ -126,7 +126,7 @@ func TestCleanerFinishedViewRequiresClickBeforeMouseWheelScroll(t *testing.T) {
 		t.Fatal("focused mouse wheel should not return a command")
 	}
 	model = next.(CleanerModel)
-	if view := stripANSIForCleanerTest(model.View()); !strings.Contains(view, "activity 12") || strings.Contains(view, "activity 19") {
+	if view := stripANSIForCleanerTest(model.View()); !strings.Contains(view, "activity 16") || strings.Contains(view, "activity 17") {
 		t.Fatalf("mouse wheel should scroll after clicking recent activity:\n%s", view)
 	}
 
@@ -141,7 +141,7 @@ func TestCleanerFinishedViewRequiresClickBeforeMouseWheelScroll(t *testing.T) {
 		t.Fatal("unfocused mouse wheel should not return a command after clicking outside")
 	}
 	model = next.(CleanerModel)
-	if view := stripANSIForCleanerTest(model.View()); !strings.Contains(view, "activity 12") || strings.Contains(view, "activity 19") {
+	if view := stripANSIForCleanerTest(model.View()); !strings.Contains(view, "activity 16") || strings.Contains(view, "activity 17") {
 		t.Fatalf("mouse wheel should stop scrolling after clicking outside recent activity:\n%s", view)
 	}
 }

@@ -21,10 +21,8 @@ const (
 
 	runCanceledText = "Canceled. The run stopped early; the activity above shows what it did before it stopped."
 
-	defaultLogViewportHeight     = 12
-	cleanerOptionsReservedHeight = 10
-	cleanerOptionsMinHeight      = 3
-	cleanerLogReservedHeight     = 18
-	cleanerLogMinHeight          = 5
-	cleanerLogMaxHeight          = 20
+	defaultLogViewportHeight = 12
+	cleanerOptionsMinHeight  = 3
+	cleanerLogMinHeight      = 3
+	cleanerLogMaxHeight      = 20
 )

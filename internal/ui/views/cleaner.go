@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"utils/internal/core/cleaner"
 	"utils/internal/ui/common"
@@ -32,6 +33,15 @@ const (
 	cleanupModeExecute
 	cleanupModeCancel
 	cleanupModeCount
+)
+
+type cleanerCompactLevel int
+
+const (
+	compactNone cleanerCompactLevel = iota
+	compactWithoutNotes
+	compactWithoutOptionDetails
+	compactWithoutSubtitle
 )
 
 type ViewState int
@@ -78,6 +88,7 @@ type CleanerModel struct {
 	cancelCleanup context.CancelFunc
 	notice        string
 	layout        common.Layout
+	compactLevel  cleanerCompactLevel
 	state         ViewState
 	confirmation  executeConfirmationSelection
 	modeSelection cleanupModeSelection
@@ -137,7 +148,7 @@ func newCleanerKeyMap() cleanerKeyMap {
 		),
 		CancelPrompt: key.NewBinding(
 			key.WithKeys("n", "esc"),
-			key.WithHelp("n/esc", "back to options"),
+			key.WithHelp("n/esc", "back"),
 		),
 	}
 }
@@ -303,6 +314,13 @@ func (m CleanerModel) Init() tea.Cmd {
 }
 
 func (m CleanerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	fitted := next.(CleanerModel)
+	fitted.fitToHeight()
+	return fitted, cmd
+}
+
+func (m CleanerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	if m.state == StateRunning {
 		var cmd tea.Cmd
@@ -396,8 +414,11 @@ func (m CleanerModel) View() string {
 
 	b.WriteString(layout.RenderWrapped(cleanerTitle, common.Title.Render))
 	b.WriteString("\n")
-	b.WriteString(layout.RenderWrapped(cleanerSubtitle, common.Muted.Render))
-	b.WriteString("\n\n")
+	if m.compactLevel < compactWithoutSubtitle {
+		b.WriteString(layout.RenderWrapped(cleanerSubtitle, common.Muted.Render))
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
 
 	switch m.state {
 	case StateRunning:
@@ -411,14 +432,20 @@ func (m CleanerModel) View() string {
 		b.WriteString("\n\n")
 	default:
 		m.optionsList.SetFocused(true)
+		m.optionsList.SetHideDetails(m.compactLevel >= compactWithoutOptionDetails)
 
-		b.WriteString(layout.RenderWrapped(cleanerBaselineNote, common.Muted.Render))
-		b.WriteString("\n\n")
+		if m.compactLevel < compactWithoutNotes {
+			b.WriteString(layout.RenderWrapped(cleanerBaselineNote, common.Muted.Render))
+			b.WriteString("\n\n")
+		}
 		b.WriteString("Options\n")
 		b.WriteString(m.optionsList.View())
 		b.WriteString("\n")
-		b.WriteString(layout.RenderWrapped(cleanerSafetyNotice, common.Muted.Render))
-		b.WriteString("\n\n")
+		if m.compactLevel < compactWithoutNotes {
+			b.WriteString(layout.RenderWrapped(cleanerSafetyNotice, common.Muted.Render))
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
 	}
 
 	if m.notice != "" {
@@ -469,8 +496,28 @@ func (m CleanerModel) View() string {
 
 func (m *CleanerModel) layoutComponents() {
 	m.help.Width = m.layout.Width
-	m.optionsList.SetSize(m.layout.Width, m.layout.ListHeight(m.optionsList.Len(), cleanerOptionsReservedHeight, cleanerOptionsMinHeight))
-	m.logViewer.SetSize(m.layout.Width, m.layout.ViewportHeight(cleanerLogReservedHeight, cleanerLogMinHeight, cleanerLogMaxHeight))
+	m.optionsList.SetSize(m.layout.Width, m.optionsList.Len())
+	m.logViewer.SetSize(m.layout.Width, m.logViewer.viewport.Height)
+}
+
+func (m *CleanerModel) fitToHeight() {
+	for level := compactNone; level <= compactWithoutSubtitle; level++ {
+		probe := *m
+		probe.compactLevel = level
+		probe.logViewer.viewport.Height = 1
+		room := m.layout.Height - lipgloss.Height(probe.View()) + 1
+		fits := room >= 0
+		if m.report != nil {
+			fits = room >= cleanerLogMinHeight
+		}
+		if fits || level == compactWithoutSubtitle {
+			m.compactLevel = level
+			if m.report != nil {
+				m.logViewer.SetSize(m.layout.Width, common.MinInt(cleanerLogMaxHeight, common.MaxInt(cleanerLogMinHeight, room)))
+			}
+			return
+		}
+	}
 }
 
 func (m CleanerModel) mouseInLogViewer(msg tea.MouseMsg) bool {
@@ -647,9 +694,17 @@ func (m *LogViewerModel) SetSize(width, height int) {
 		height = defaultLogViewportHeight
 	}
 
+	if width == m.viewport.Width && height == m.viewport.Height {
+		return
+	}
+
+	atBottom := m.viewport.AtBottom()
 	m.viewport.Width = width
 	m.viewport.Height = height
 	m.refreshContent()
+	if atBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m *LogViewerModel) SetReport(report cleaner.Report) {
