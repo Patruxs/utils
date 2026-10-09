@@ -149,14 +149,13 @@ const (
 	networkCanceledRun = "Canceled; nothing was changed."
 	networkDefaultIP   = "127.0.0.1"
 
-	defaultNetworkLogViewportHeight = 12
-	networkWideMinWidth             = 100
-	networkDialogMaxWidth           = 100
-	networkNarrowCrumbWidth         = 60
-	networkListMinRows              = 3
-	networkDetailMaxRows            = 4
-	networkDetailTightRows          = 2
-	networkSessionMinListRows       = 8
+	networkWideMinWidth       = 100
+	networkDialogMaxWidth     = 100
+	networkNarrowCrumbWidth   = 60
+	networkListMinRows        = 3
+	networkDetailMaxRows      = 4
+	networkDetailTightRows    = 2
+	networkSessionMinListRows = 8
 )
 
 const (
@@ -312,14 +311,6 @@ func newNetworkActionList() common.CheckboxListModel {
 	list.SetHideDetails(true)
 	list.SetFocused(true)
 	return list
-}
-
-func trimmedSpinner(base spinner.Spinner) spinner.Spinner {
-	frames := make([]string, len(base.Frames))
-	for index, frame := range base.Frames {
-		frames[index] = strings.TrimSpace(frame)
-	}
-	return spinner.Spinner{Frames: frames, FPS: base.FPS}
 }
 
 func networkActionKey(id networkActionID) string {

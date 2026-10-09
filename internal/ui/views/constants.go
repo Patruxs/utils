@@ -18,11 +18,4 @@ const (
 	cleanerSafetyNotice = "Deletes only inside the current user profile, never through a link that leads outside it. Admin/root elevation is never requested."
 
 	cleanerRunTimeout = 5 * time.Minute
-
-	runCanceledText = "Canceled. The run stopped early; the activity above shows what it did before it stopped."
-
-	defaultLogViewportHeight = 12
-	cleanerOptionsMinHeight  = 3
-	cleanerLogMinHeight      = 3
-	cleanerLogMaxHeight      = 20
 )

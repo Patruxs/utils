@@ -37,15 +37,6 @@ const (
 	cleanupModeCount
 )
 
-type compactionLevel int
-
-const (
-	compactNone compactionLevel = iota
-	compactWithoutNotes
-	compactWithoutDetails
-	compactWithoutSubtitle
-)
-
 type optionsFit int
 
 const (
@@ -952,22 +943,6 @@ func cancelingNotice(subject string, quitAfter bool) string {
 		return "Canceling " + subject + "; UTILS quits when it stops. Press ctrl+c again to quit now and leave the current step unfinished."
 	}
 	return "Canceling " + subject + "..."
-}
-
-func cleanerRow(selected bool, marker, label string) string {
-	cursor := " "
-	renderedLabel := label
-	if selected {
-		cursor = common.Selected.Render(">")
-		renderedLabel = common.Selected.Render(label)
-	}
-
-	text := strings.TrimSpace(strings.Join([]string{marker, renderedLabel}, " "))
-	return fmt.Sprintf("  %s %s\n", cursor, text)
-}
-
-func confirmationRow(selected bool, label string) string {
-	return cleanerRow(selected, "", label)
 }
 
 func credentialManagerTag() string {
