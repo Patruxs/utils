@@ -606,7 +606,7 @@ func (m NetworkModel) updateWriteConfirmation(msg tea.KeyMsg) (tea.Model, tea.Cm
 	switch {
 	case key.Matches(msg, common.DefaultKeys.Yes):
 		return m.startRun(m.pendingRun)
-	case key.Matches(msg, common.DefaultKeys.No):
+	case key.Matches(msg, common.DefaultKeys.No, common.DefaultKeys.CancelRun):
 		return m.cancelWriteConfirmation()
 	case key.Matches(msg, common.DefaultKeys.Up, common.DefaultKeys.Down):
 		m.confirmRun = !m.confirmRun
@@ -804,7 +804,7 @@ func (m NetworkModel) Running() bool {
 }
 
 func (m NetworkModel) OwnsKeys() bool {
-	return m.Running() || m.state == networkStateEditingHostsAdd
+	return m.Running() || m.state == networkStateEditingHostsAdd || m.state == networkStateConfirmingWrite
 }
 
 func (m NetworkModel) renderActions() string {
