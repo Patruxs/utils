@@ -1,86 +1,129 @@
 package views
 
 import (
+	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"utils/internal/core/cleaner"
 )
 
-func TestRenderActivityWrapsLongPathsToViewportWidth(t *testing.T) {
+func TestCleanerLogSectionsGroupResultsAndFoldOnlyNotPresentSkips(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "home", "dev")
+	credentials := filepath.Join(home, ".aws", "credentials")
+	missing := filepath.Join(home, ".npmrc")
+	report := cleaner.Report{Entries: []cleaner.Entry{
+		{Level: cleaner.LevelInfo, Message: "Mode: dry-run. No files will be deleted."},
+		{Level: cleaner.LevelSkip, Message: ".npmrc not found", Target: "developer credential", Path: missing, NotPresent: true},
+		{Level: cleaner.LevelDryRun, Message: "Would delete", Target: "developer credential", Path: credentials},
+		{Level: cleaner.LevelSkip, Message: "Refusing to touch developer credential outside current user profile", Target: "developer credential", Path: filepath.Join(home, ".config", "gh", "hosts.yml")},
+		{Level: cleaner.LevelWarn, Message: "A target process appears to be running."},
+		{Level: cleaner.LevelError, Message: "Could not inspect developer credential"},
+	}}
+
+	sections := cleanerLogSections(report, nil, false, home)
+
+	var order []string
+	for _, section := range sections {
+		order = append(order, section.ID)
+	}
+	if want := []string{logSectionErrors, logSectionWarnings, logSectionRemovals, logSectionSkipped, logSectionNotes}; strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Fatalf("expected sections %v, got %v", want, order)
+	}
+
+	removals := sections[2]
+	if len(removals.Lines) != 1 || removals.Lines[0].Text != "developer credential" || removals.Lines[0].Detail != filepath.Join("~", ".aws", "credentials") {
+		t.Fatalf("expected the removal to show its label and home-relative path, got %#v", removals.Lines)
+	}
+
+	skipped := sections[3]
+	if len(skipped.Folded) != 1 || skipped.Folded[0].Detail != filepath.Join("~", ".npmrc") || skipped.Expanded {
+		t.Fatalf("expected the not-present skip folded away, got %#v", skipped)
+	}
+	if len(skipped.Lines) != 1 || !strings.Contains(skipped.Lines[0].Text, "Refusing to touch") {
+		t.Fatalf("expected the refused link to stay visible, got %#v", skipped.Lines)
+	}
+
+	quiet := cleanerLogSections(cleaner.Report{Entries: report.Entries[:1]}, nil, false, home)
+	if len(quiet) != 1 || quiet[0].ID != logSectionNotes {
+		t.Fatalf("expected empty groups to be left out, got %#v", quiet)
+	}
+}
+
+func TestCleanerResultShowsRunErrorsThatHaveNoLogEntry(t *testing.T) {
+	logFailure := errors.New("write cleanup log: permission denied")
+
+	model := finishedCleanerModel(t, cleaner.Report{Entries: []cleaner.Entry{{Level: cleaner.LevelInfo, Message: "Local cleanup finished."}}}, logFailure)
+
+	if view := plainView(model); !strings.Contains(view, "ERRORS") || !strings.Contains(view, "permission denied") {
+		t.Fatalf("expected an error without a log entry to be listed under ERRORS:\n%s", view)
+	}
+}
+
+func TestCleanerSkipKeyRevealsNotPresentTargets(t *testing.T) {
+	model := finishedCleanerModel(t, cleaner.Report{Entries: []cleaner.Entry{
+		{Level: cleaner.LevelSkip, Message: "not found", Target: "developer credential", Path: "/elsewhere/.npmrc", NotPresent: true},
+		{Level: cleaner.LevelSkip, Message: "Refusing to touch a link that leaves home"},
+	}}, nil)
+
+	before := plainView(model)
+	if strings.Contains(before, "/elsewhere/.npmrc") || !strings.Contains(before, "Refusing to touch") {
+		t.Fatalf("expected not-present targets folded and other skips visible:\n%s", before)
+	}
+
+	next, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	model = next.(CleanerModel)
+	if after := plainView(model); !strings.Contains(after, "/elsewhere/.npmrc") {
+		t.Fatalf("expected s to show the not-present targets:\n%s", after)
+	}
+}
+
+func TestCleanerResultKeepsLongPathsWhole(t *testing.T) {
 	const width = 52
 	longPath := `C:\Users\Infra_IT_Intership_P\AppData\Local\Microsoft\Edge\User Data\Default\Cookies`
-	report := cleaner.Report{
-		Entries: []cleaner.Entry{
-			{
-				Level:   cleaner.LevelDryRun,
-				Message: "Would delete browser cache: " + longPath,
-			},
-		},
-	}
+	logPath := `C:\Users\Infra_IT_Intership_P\offboarding-cleanup-20260527-104557.log`
+	model := NewCleanerModel()
+	next, _ := model.Update(tea.WindowSizeMsg{Width: width, Height: 30})
+	next, _ = next.Update(cleanerFinishedMsg{report: cleaner.Report{
+		LogPath: logPath,
+		Entries: []cleaner.Entry{{Level: cleaner.LevelDryRun, Message: "Would delete", Target: "browser cache", Path: longPath}},
+	}})
 
-	view := stripANSIForCleanerTest(renderActivity(report, width))
+	view := plainView(next.(CleanerModel))
 	for _, line := range strings.Split(view, "\n") {
-		if len([]rune(line)) > width {
-			t.Fatalf("expected wrapped activity line <= %d columns, got %d:\n%s", width, len([]rune(line)), view)
+		if lipgloss.Width(line) > width {
+			t.Fatalf("expected lines <= %d columns, got %d:\n%s", width, lipgloss.Width(line), view)
 		}
 	}
-
-	if !strings.Contains(removeWhitespace(view), removeWhitespace(longPath)) {
-		t.Fatalf("expected wrapped activity to preserve full path %q:\n%s", longPath, view)
+	joined := removeWhitespace(strings.NewReplacer("│", "", "╭", "", "╮", "", "╰", "", "╯", "").Replace(view))
+	for _, path := range []string{longPath, logPath} {
+		if !strings.Contains(joined, removeWhitespace(path)) {
+			t.Fatalf("expected the full path %q to stay visible:\n%s", path, view)
+		}
 	}
 }
 
-func TestLogViewerWrapsLogPathToViewportWidth(t *testing.T) {
-	const width = 44
-	longPath := `C:\Users\Infra_IT_Intership_P\offboarding-cleanup-20260527-104557.log`
-	report := cleaner.Report{LogPath: longPath}
+func TestCleanerFinishedViewOpensAtTopAndScrollsWithArrowKeys(t *testing.T) {
+	model := finishedCleanerModelWithActivities(t, 40)
 
-	viewer := NewLogViewerModel()
-	viewer.SetSize(width, 10)
-	viewer.SetReport(report)
-
-	view := stripANSIForCleanerTest(viewer.View())
-	logBlock := view
-	if beforeStats, _, ok := strings.Cut(view, "  dry-run:"); ok {
-		logBlock = beforeStats
+	before := plainView(model)
+	if !strings.Contains(before, "activity 00") || strings.Contains(before, "activity 39") {
+		t.Fatalf("expected the finished log to open at the top:\n%s", before)
 	}
 
-	for _, line := range strings.Split(strings.TrimSpace(logBlock), "\n") {
-		if len([]rune(line)) > width {
-			t.Fatalf("expected wrapped log path line <= %d columns, got %d:\n%s", width, len([]rune(line)), view)
-		}
-	}
-
-	if !strings.Contains(removeWhitespace(logBlock), removeWhitespace(longPath)) {
-		t.Fatalf("expected wrapped log block to preserve full path %q:\n%s", longPath, view)
-	}
-}
-
-func TestCleanerFinishedViewScrollsRecentActivityWithArrowKeys(t *testing.T) {
-	model := finishedCleanerModelWithActivities(t, 20)
-
-	before := stripANSIForCleanerTest(model.View())
-	if !strings.Contains(before, "activity 19") {
-		t.Fatalf("expected finished activity to start at the bottom:\n%s", before)
-	}
-	if strings.Contains(before, "scroll activity") {
-		t.Fatalf("finished view should not render scroll activity help text:\n%s", before)
-	}
-
-	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyUp})
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if cmd != nil {
-		t.Fatal("scrolling recent activity should not return a command")
+		t.Fatal("scrolling the log should not return a command")
 	}
 	model = next.(CleanerModel)
-
-	after := stripANSIForCleanerTest(model.View())
-	if !strings.Contains(after, "activity 18") || strings.Contains(after, "activity 19") {
-		t.Fatalf("expected up arrow to scroll recent activity instead of changing options:\n%s", after)
+	if after := plainView(model); after == before || model.optionsList.Selected().ID != optionBrowserProfiles {
+		t.Fatalf("expected down to scroll the log instead of moving the options cursor:\n%s", after)
 	}
 }
 
@@ -102,78 +145,76 @@ func TestCleanerEnterAfterRunReturnsToOptionsSoTheCursorMoves(t *testing.T) {
 }
 
 func TestCleanerFinishedViewRequiresClickBeforeMouseWheelScroll(t *testing.T) {
-	model := finishedCleanerModelWithActivities(t, 20)
-
-	next, cmd := model.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp, X: 1, Y: 20})
-	if cmd != nil {
-		t.Fatal("unfocused mouse wheel should not return a command")
+	model := finishedCleanerModelWithActivities(t, 40)
+	activityY := activityPanelRow(t, model)
+	wheel := func(button tea.MouseButton) {
+		next, cmd := model.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: button, X: 2, Y: activityY + 2})
+		if cmd != nil {
+			t.Fatal("mouse wheel should not return a command")
+		}
+		model = next.(CleanerModel)
 	}
-	model = next.(CleanerModel)
-	if view := stripANSIForCleanerTest(model.View()); !strings.Contains(view, "activity 19") {
-		t.Fatalf("mouse wheel should not scroll before clicking recent activity:\n%s", view)
-	}
-
-	view := model.View()
-	recentActivityY := strings.Count(view[:strings.Index(view, "Recent activity\n")], "\n")
-	next, cmd = model.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: recentActivityY})
-	if cmd != nil {
-		t.Fatal("clicking recent activity should not return a command")
-	}
-	model = next.(CleanerModel)
-
-	next, cmd = model.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp, X: 1, Y: recentActivityY + 1})
-	if cmd != nil {
-		t.Fatal("focused mouse wheel should not return a command")
-	}
-	model = next.(CleanerModel)
-	if view := stripANSIForCleanerTest(model.View()); !strings.Contains(view, "activity 16") || strings.Contains(view, "activity 17") {
-		t.Fatalf("mouse wheel should scroll after clicking recent activity:\n%s", view)
+	click := func(y int) {
+		next, _ := model.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: y})
+		model = next.(CleanerModel)
 	}
 
-	next, cmd = model.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: 0})
-	if cmd != nil {
-		t.Fatal("clicking outside recent activity should not return a command")
+	wheel(tea.MouseButtonWheelDown)
+	if view := plainView(model); !strings.Contains(view, "activity 00") {
+		t.Fatalf("mouse wheel should not scroll before clicking the log:\n%s", view)
 	}
-	model = next.(CleanerModel)
 
-	next, cmd = model.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown, X: 1, Y: recentActivityY + 1})
-	if cmd != nil {
-		t.Fatal("unfocused mouse wheel should not return a command after clicking outside")
+	click(activityY + 1)
+	wheel(tea.MouseButtonWheelDown)
+	scrolled := plainView(model)
+	if strings.Contains(scrolled, "activity 00") {
+		t.Fatalf("mouse wheel should scroll after clicking the log:\n%s", scrolled)
 	}
-	model = next.(CleanerModel)
-	if view := stripANSIForCleanerTest(model.View()); !strings.Contains(view, "activity 16") || strings.Contains(view, "activity 17") {
-		t.Fatalf("mouse wheel should stop scrolling after clicking outside recent activity:\n%s", view)
+
+	click(0)
+	wheel(tea.MouseButtonWheelDown)
+	if view := plainView(model); view != scrolled {
+		t.Fatalf("mouse wheel should stop scrolling after clicking outside the log:\n%s", view)
 	}
+}
+
+func activityPanelRow(t *testing.T, model CleanerModel) int {
+	t.Helper()
+	for row, line := range strings.Split(plainView(model), "\n") {
+		if strings.Contains(line, "Activity") {
+			return row
+		}
+	}
+	t.Fatalf("no Activity panel in view:\n%s", plainView(model))
+	return 0
 }
 
 func finishedCleanerModelWithActivities(t *testing.T, count int) CleanerModel {
 	t.Helper()
+	entries := make([]cleaner.Entry, count)
+	for i := range entries {
+		entries[i] = cleaner.Entry{Level: cleaner.LevelInfo, Message: fmt.Sprintf("activity %02d", i)}
+	}
+	return finishedCleanerModel(t, cleaner.Report{Entries: entries}, nil)
+}
+
+func finishedCleanerModel(t *testing.T, report cleaner.Report, err error) CleanerModel {
+	t.Helper()
 
 	model := NewCleanerModel()
-	next, cmd := model.Update(tea.WindowSizeMsg{Width: 88, Height: 23})
+	next, cmd := model.Update(tea.WindowSizeMsg{Width: 88, Height: 21})
 	if cmd != nil {
 		t.Fatal("resize should not return a command")
 	}
-	model = next.(CleanerModel)
-
-	entries := make([]cleaner.Entry, count)
-	for i := range entries {
-		entries[i] = cleaner.Entry{
-			Level:   cleaner.LevelInfo,
-			Message: fmt.Sprintf("activity %02d", i),
-		}
-	}
-
-	next, cmd = model.Update(cleanerFinishedMsg{report: cleaner.Report{Entries: entries}})
+	next, cmd = next.Update(cleanerFinishedMsg{report: report, err: err})
 	if cmd != nil {
 		t.Fatal("finished cleanup message should not return a command")
 	}
-
 	return next.(CleanerModel)
 }
 
-func stripANSIForCleanerTest(value string) string {
-	return regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(value, "")
+func plainView(model CleanerModel) string {
+	return regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(model.View(), "")
 }
 
 func removeWhitespace(value string) string {

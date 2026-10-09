@@ -4,13 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -44,6 +46,17 @@ const (
 	compactWithoutSubtitle
 )
 
+type optionsFit int
+
+const (
+	fitFull optionsFit = iota
+	fitWithoutSubtitle
+	fitWithoutNotes
+	fitShortDetails
+	fitScrollList
+	fitDialogOnly
+)
+
 type ViewState int
 
 const (
@@ -54,22 +67,45 @@ const (
 	StateFinished
 )
 
+const (
+	logSectionErrors   = "errors"
+	logSectionWarnings = "warnings"
+	logSectionRemovals = "removals"
+	logSectionSkipped  = "skipped"
+	logSectionNotes    = "notes"
+
+	cleanerShortTitle           = "Cleaner"
+	cleanerShortTitleMaxWidth   = 60
+	cleanerTwoColumnMinWidth    = 100
+	cleanerOptionsPanelMinWidth = 66
+	cleanerShortDetailLines     = 2
+	cleanerActivityMinHeight    = 3
+	cleanerDefaultBodyHeight    = 21
+)
+
 type cleanerKeyMap struct {
-	Move         key.Binding
-	Select       key.Binding
-	Toggle       key.Binding
-	Continue     key.Binding
-	Run          key.Binding
-	Execute      key.Binding
-	ConfirmPrev  key.Binding
-	ConfirmNext  key.Binding
-	BackToMenu   key.Binding
-	CancelPrompt key.Binding
+	Move          key.Binding
+	Toggle        key.Binding
+	Continue      key.Binding
+	Menu          key.Binding
+	Choose        key.Binding
+	Select        key.Binding
+	Run           key.Binding
+	Execute       key.Binding
+	ConfirmPrev   key.Binding
+	ConfirmNext   key.Binding
+	ConfirmChoose key.Binding
+	CancelPrompt  key.Binding
+	CancelConfirm key.Binding
+	Scroll        key.Binding
+	ToggleSkipped key.Binding
+	BackToOptions key.Binding
 }
 
 type cleanerContextualKeyMap struct {
 	cleanerKeyMap
-	state ViewState
+	state          ViewState
+	canFoldSkipped bool
 }
 
 type CleanerRunFunc func(context.Context, cleaner.Options) (cleaner.Report, error)
@@ -77,27 +113,22 @@ type CleanerRunFunc func(context.Context, cleaner.Options) (cleaner.Report, erro
 type CleanerModel struct {
 	run           CleanerRunFunc
 	spinner       spinner.Model
-	help          help.Model
 	keyMap        cleanerKeyMap
 	optionsList   common.CheckboxListModel
-	logViewer     LogViewerModel
+	logViewer     common.LogViewer
 	options       cleaner.Options
 	report        *cleaner.Report
 	err           error
 	canceled      bool
 	cancelCleanup context.CancelFunc
 	notice        string
-	layout        common.Layout
-	compactLevel  compactionLevel
+	home          string
+	width         int
+	height        int
+	startedAt     time.Time
 	state         ViewState
 	confirmation  executeConfirmationSelection
 	modeSelection cleanupModeSelection
-}
-
-type LogViewerModel struct {
-	viewport     viewport.Model
-	report       *cleaner.Report
-	mouseFocused bool
 }
 
 type cleanerFinishedMsg struct {
@@ -110,53 +141,22 @@ var _ tea.Model = CleanerModel{}
 
 func newCleanerKeyMap() cleanerKeyMap {
 	return cleanerKeyMap{
-		Move: key.NewBinding(
-			key.WithKeys("up", "down", "k", "j"),
-			key.WithHelp("up/down:", "choose"),
-		),
-		Select: key.NewBinding(
-			key.WithKeys("enter", " "),
-			key.WithHelp("enter/space:", "select"),
-		),
-		Toggle: key.NewBinding(
-			key.WithKeys(" "),
-			key.WithHelp("space:", "toggle"),
-		),
-		Continue: key.NewBinding(
-			key.WithKeys("enter"),
-			key.WithHelp("enter:", "cleanup"),
-		),
-		Run: key.NewBinding(
-			key.WithKeys("r"),
-			key.WithHelp("r", "dry-run"),
-		),
-		Execute: key.NewBinding(
-			key.WithKeys("e", "x"),
-			key.WithHelp("e/x", "execute"),
-		),
-		ConfirmPrev: key.NewBinding(
-			key.WithKeys("left", "h"),
-			key.WithHelp("left/h", "previous"),
-		),
-		ConfirmNext: key.NewBinding(
-			key.WithKeys("right", "l"),
-			key.WithHelp("right/l", "next"),
-		),
-		BackToMenu: key.NewBinding(
-			key.WithKeys("q", "esc"),
-			key.WithHelp("q/esc", "main menu"),
-		),
-		CancelPrompt: key.NewBinding(
-			key.WithKeys("n", "esc"),
-			key.WithHelp("n/esc", "back"),
-		),
-	}
-}
-
-func (k cleanerKeyMap) contextual(state ViewState) cleanerContextualKeyMap {
-	return cleanerContextualKeyMap{
-		cleanerKeyMap: k,
-		state:         state,
+		Move:          key.NewBinding(key.WithKeys("up", "down", "k", "j"), key.WithHelp("↑↓", "move")),
+		Toggle:        key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
+		Continue:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "run")),
+		Menu:          key.NewBinding(key.WithKeys("q", "esc"), key.WithHelp("esc", "menu")),
+		Choose:        key.NewBinding(key.WithKeys("up", "down", "k", "j"), key.WithHelp("↑↓", "choose")),
+		Select:        key.NewBinding(key.WithKeys("enter", " "), key.WithHelp("enter", "select")),
+		Run:           key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "dry-run")),
+		Execute:       key.NewBinding(key.WithKeys("e", "x"), key.WithHelp("e", "execute")),
+		ConfirmPrev:   key.NewBinding(key.WithKeys("left", "h")),
+		ConfirmNext:   key.NewBinding(key.WithKeys("right", "l")),
+		ConfirmChoose: key.NewBinding(key.WithKeys("left", "right", "h", "l"), key.WithHelp("←→", "choose")),
+		CancelPrompt:  key.NewBinding(key.WithKeys("n", "esc"), key.WithHelp("esc", "back")),
+		CancelConfirm: key.NewBinding(key.WithKeys("n", "esc"), key.WithHelp("n/esc", "cancel")),
+		Scroll:        key.NewBinding(key.WithKeys("up", "down", "pgup", "pgdown"), key.WithHelp("↑↓", "scroll")),
+		ToggleSkipped: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "skipped")),
+		BackToOptions: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "options")),
 	}
 }
 
@@ -165,41 +165,21 @@ func (k cleanerContextualKeyMap) ShortHelp() []key.Binding {
 	case StateRunning:
 		return []key.Binding{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit}
 	case StateConfirmingExecute:
-		return []key.Binding{k.Move, k.Select, common.DefaultKeys.Yes, k.CancelPrompt}
+		return []key.Binding{k.ConfirmChoose, k.Select, common.DefaultKeys.Yes, k.CancelConfirm}
 	case StatePromptingMode:
-		return []key.Binding{k.Move, k.Select, k.Run, k.Execute, k.CancelPrompt}
+		return []key.Binding{k.Run, k.Execute, k.Choose, k.Select, k.CancelPrompt}
 	case StateFinished:
-		return []key.Binding{common.DefaultKeys.ScrollLog, common.DefaultKeys.BackToList, k.BackToMenu}
+		if k.canFoldSkipped {
+			return []key.Binding{k.Scroll, k.ToggleSkipped, k.BackToOptions, k.Menu}
+		}
+		return []key.Binding{k.Scroll, k.BackToOptions, k.Menu}
 	default:
-		return []key.Binding{k.Move, k.Toggle, k.Continue, k.BackToMenu}
+		return []key.Binding{k.Move, k.Toggle, k.Continue, k.Menu}
 	}
 }
 
 func (k cleanerContextualKeyMap) FullHelp() [][]key.Binding {
-	switch k.state {
-	case StateRunning:
-		return [][]key.Binding{
-			{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit},
-		}
-	case StateConfirmingExecute:
-		return [][]key.Binding{
-			{k.Move, k.Select},
-			{common.DefaultKeys.Yes, k.CancelPrompt},
-		}
-	case StatePromptingMode:
-		return [][]key.Binding{
-			{k.Move, k.Select},
-			{k.Run, k.Execute, k.CancelPrompt},
-		}
-	case StateFinished:
-		return [][]key.Binding{
-			{common.DefaultKeys.ScrollLog, common.DefaultKeys.BackToList, k.BackToMenu},
-		}
-	default:
-		return [][]key.Binding{
-			{k.Move, k.Toggle, k.Continue, k.BackToMenu},
-		}
-	}
+	return [][]key.Binding{k.ShortHelp()}
 }
 
 func NewCleanerModel() CleanerModel {
@@ -207,45 +187,20 @@ func NewCleanerModel() CleanerModel {
 }
 
 func NewCleanerModelWithRunner(run CleanerRunFunc) CleanerModel {
-	optionsList := newCleanerOptionsList()
-	optionsList.SetFocused(false)
-
-	return CleanerModel{
+	home, _ := os.UserHomeDir()
+	model := CleanerModel{
 		run: run,
 		spinner: spinner.New(
-			spinner.WithSpinner(spinner.Dot),
+			spinner.WithSpinner(trimmedSpinner(spinner.Dot)),
 			spinner.WithStyle(common.Accent),
 		),
-		help:        common.NewHelpModel(),
 		keyMap:      newCleanerKeyMap(),
-		optionsList: optionsList,
-		logViewer:   NewLogViewerModel(),
-		layout:      common.NewLayout(0, 0),
+		optionsList: newCleanerOptionsList(),
+		logViewer:   common.NewLogViewer(),
+		home:        home,
 	}
-}
-
-func NewLogViewerModel() LogViewerModel {
-	logViewport := viewport.New(0, defaultLogViewportHeight)
-	logViewport.KeyMap = viewport.KeyMap{
-		Down: key.NewBinding(
-			key.WithKeys("down", "j"),
-			key.WithHelp("down/j", "scroll down"),
-		),
-		Up: key.NewBinding(
-			key.WithKeys("up", "k"),
-			key.WithHelp("up/k", "scroll up"),
-		),
-		PageDown: key.NewBinding(
-			key.WithKeys("pgdown", "d", "ctrl+d"),
-			key.WithHelp("pgdn/d", "scroll down"),
-		),
-		PageUp: key.NewBinding(
-			key.WithKeys("pgup", "u", "ctrl+u"),
-			key.WithHelp("pgup/u", "scroll up"),
-		),
-	}
-
-	return LogViewerModel{viewport: logViewport}
+	model.layoutComponents()
+	return model
 }
 
 func newCleanerOptionsList() common.CheckboxListModel {
@@ -269,8 +224,10 @@ func newCleanerOptionsList() common.CheckboxListModel {
 			FilterText: "browser profiles include caches",
 		},
 		{
-			ID:    optionCredentialManager,
-			Label: "Clean Windows Credential Manager allowlist" + credentialManagerHint(),
+			ID:      optionCredentialManager,
+			Label:   "Clean Windows Credential Manager allowlist",
+			Tag:     credentialManagerTag(),
+			TagTone: common.ToneSubtle,
 			Details: []string{
 				"Windows only: scans Credential Manager for allowlisted dev entries such as Git, cloud CLIs, Docker, kube, npm, Terraform, Visual Studio, VS Code, Copilot, and AI tools.",
 				"Dry-run lists matching entries; execute deletes only those allowlisted matches.",
@@ -278,8 +235,10 @@ func newCleanerOptionsList() common.CheckboxListModel {
 			FilterText: "windows credential manager allowlist credentials",
 		},
 		{
-			ID:    optionForceStop,
-			Label: "Force stop running target processes",
+			ID:      optionForceStop,
+			Label:   "Force stop running target processes",
+			Tag:     "also in dry-run",
+			TagTone: common.ToneWarning,
 			Details: []string{
 				"Stops running Chrome, Edge, Firefox, VS Code, and Visual Studio before cleanup so locked auth/profile files can be handled.",
 				"This happens in dry-run too. Dry-run still only logs file and Credential Manager deletions.",
@@ -304,9 +263,21 @@ func newCleanerOptionsList() common.CheckboxListModel {
 			},
 			FilterText: "full tool reset folders settings runtimes vms ide ai",
 		},
-	}, 0, cleanerOptionsMinHeight)
+	}, 0, 0)
 	optionsList.SelectByID(optionBrowserProfiles)
+	optionsList.SetHideDetails(true)
 	return optionsList
+}
+
+func cleanerOptionSummaries() []struct{ id, summary string } {
+	return []struct{ id, summary string }{
+		{optionSSHKeys, "SSH keys"},
+		{optionBrowserProfiles, "Browser profiles and caches"},
+		{optionCredentialManager, "Windows Credential Manager allowlist entries"},
+		{optionForceStop, "Force stop running browsers and IDEs first"},
+		{optionShellHistory, "Shell and tool histories"},
+		{optionFullToolReset, "Full tool reset: whole tool folders and IDE data"},
+	}
 }
 
 func (m CleanerModel) Init() tea.Cmd {
@@ -315,9 +286,9 @@ func (m CleanerModel) Init() tea.Cmd {
 
 func (m CleanerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
-	fitted := next.(CleanerModel)
-	fitted.fitToHeight()
-	return fitted, cmd
+	laidOut := next.(CleanerModel)
+	laidOut.layoutComponents()
+	return laidOut, cmd
 }
 
 func (m CleanerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -330,8 +301,8 @@ func (m CleanerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.layout = common.NewLayout(msg.Width, msg.Height)
-		m.layoutComponents()
+		m.width = msg.Width
+		m.height = msg.Height
 	case cleanerFinishedMsg:
 		if m.cancelCleanup != nil {
 			m.cancelCleanup()
@@ -343,8 +314,7 @@ func (m CleanerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.canceled = msg.canceled
 		m.notice = ""
 		m.logViewer.SetMouseFocused(false)
-		m.logViewer.SetReport(msg.report)
-		m.layoutComponents()
+		m.logViewer.SetSections(cleanerLogSections(msg.report, cleanerUnreportedError(msg.report, msg.err, msg.canceled), m.options.Execute, m.home))
 		return m, nil
 	case tea.KeyMsg:
 		switch m.state {
@@ -354,220 +324,66 @@ func (m CleanerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, batch(cmds...)
 		case StateConfirmingExecute:
-			return m.updateExecuteConfirmation(msg, cmds...)
+			return m.updateExecuteConfirmation(msg)
 		case StatePromptingMode:
-			return m.updateModePrompt(msg, cmds...)
+			return m.updateModePrompt(msg)
 		case StateFinished:
-			if m.logViewer.IsKeyScrollInput(msg) {
-				var cmd tea.Cmd
-				m.logViewer, cmd = m.logViewer.Update(msg)
-				cmds = append(cmds, cmd)
-				return m, batch(cmds...)
-			}
-			if key.Matches(msg, common.DefaultKeys.BackToList) {
-				m.state = StateSelectingOptions
-				return m, nil
-			}
-			fallthrough
+			return m.updateFinished(msg)
 		case StateSelectingOptions:
-			switch {
-			case key.Matches(msg, common.DefaultKeys.Up):
-				m.moveOptions(-1)
-				return m, nil
-			case key.Matches(msg, common.DefaultKeys.Down):
-				m.moveOptions(1)
-				return m, nil
-			case key.Matches(msg, common.DefaultKeys.Space):
-				return m.toggleFocusedOption()
-			case key.Matches(msg, common.DefaultKeys.Enter):
-				return m.openModePrompt()
-			}
+			return m.updateOptions(msg)
 		}
 	case tea.MouseMsg:
-		if m.state == StateFinished && m.report != nil {
+		if m.state == StateFinished {
 			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-				m.logViewer.SetMouseFocused(m.mouseInLogViewer(msg))
+				m.logViewer.SetMouseFocused(m.mouseInActivity(msg))
 				return m, nil
 			}
 			if m.logViewer.IsFocusedMouseScrollInput(msg) {
 				var cmd tea.Cmd
 				m.logViewer, cmd = m.logViewer.Update(msg)
 				cmds = append(cmds, cmd)
-				return m, batch(cmds...)
 			}
-			return m, nil
 		}
-	}
-
-	if m.report != nil {
-		var cmd tea.Cmd
-		m.logViewer, cmd = m.logViewer.Update(msg)
-		cmds = append(cmds, cmd)
 	}
 
 	return m, batch(cmds...)
 }
 
-func (m CleanerModel) View() string {
-	var b strings.Builder
-	layout := m.layout
-
-	b.WriteString(layout.RenderWrapped(cleanerTitle, common.Title.Render))
-	b.WriteString("\n")
-	if m.compactLevel < compactWithoutSubtitle {
-		b.WriteString(layout.RenderWrapped(cleanerSubtitle, common.Muted.Render))
-		b.WriteString("\n")
-	}
-	b.WriteString("\n")
-
-	switch m.state {
-	case StateRunning:
-		mode := "dry-run"
-		if m.options.Execute {
-			mode = "execute"
-		}
-		b.WriteString(layout.RenderWrapped(fmt.Sprintf("%s Running %s cleanup...", m.spinner.View(), mode), func(strs ...string) string {
-			return strings.Join(strs, "")
-		}))
-		b.WriteString("\n\n")
-	default:
-		m.optionsList.SetFocused(true)
-		m.optionsList.SetHideDetails(m.compactLevel >= compactWithoutDetails)
-
-		if m.compactLevel < compactWithoutNotes {
-			b.WriteString(layout.RenderWrapped(cleanerBaselineNote, common.Muted.Render))
-			b.WriteString("\n\n")
-		}
-		b.WriteString("Options\n")
-		b.WriteString(m.optionsList.View())
-		b.WriteString("\n")
-		if m.compactLevel < compactWithoutNotes {
-			b.WriteString(layout.RenderWrapped(cleanerSafetyNotice, common.Muted.Render))
-			b.WriteString("\n")
-		}
-		b.WriteString("\n")
-	}
-
-	if m.notice != "" {
-		b.WriteString(layout.RenderWrapped(m.notice, common.Warning.Render))
-		b.WriteString("\n\n")
-	}
-
-	switch m.state {
-	case StatePromptingMode:
-		b.WriteString(layout.RenderWrapped("Choose cleanup mode for the selected options.", common.Warning.Render))
-		b.WriteString("\n")
-		b.WriteString(cleanerRow(m.modeSelection == cleanupModeDryRun, "", "Run dry-run cleanup"))
-		b.WriteString(cleanerRow(m.modeSelection == cleanupModeExecute, "", "Run execute cleanup"))
-		b.WriteString(cleanerRow(m.modeSelection == cleanupModeCancel, "", "Cancel option"))
-		b.WriteString("\n")
-	case StateConfirmingExecute:
-		b.WriteString(layout.RenderWrapped("Execute mode will delete matching local files. Choose an option and press enter.", common.Error.Render))
-		b.WriteString("\n")
-		b.WriteString(confirmationRow(m.confirmation == confirmationCancel, "Cancel"))
-		b.WriteString(confirmationRow(m.confirmation == confirmationRun, "Run execute cleanup"))
-		b.WriteString("\n")
-	}
-
-	if m.report != nil {
-		b.WriteString("\n")
-		b.WriteString(m.logViewer.View())
-	}
-
-	if m.canceled {
-		b.WriteString("\n")
-		b.WriteString(layout.RenderWrapped(runCanceledText, common.Warning.Render))
-		b.WriteString("\n")
-	} else if m.err != nil {
-		b.WriteString("\n")
-		b.WriteString(layout.RenderWrapped("Completed with errors: "+m.err.Error(), common.Error.Render))
-		b.WriteString("\n")
-	}
-
-	helpView := m.renderHelp()
-	if helpView != "" {
-		b.WriteString("\n")
-		b.WriteString(helpView)
-		b.WriteString("\n")
-	}
-
-	return b.String()
-}
-
-func (m *CleanerModel) layoutComponents() {
-	m.help.Width = m.layout.Width
-	m.optionsList.SetSize(m.layout.Width, m.optionsList.Len())
-	m.logViewer.SetSize(m.layout.Width, m.logViewer.viewport.Height)
-}
-
-func (m *CleanerModel) fitToHeight() {
-	for level := compactNone; level <= compactWithoutSubtitle; level++ {
-		probe := *m
-		probe.compactLevel = level
-		probe.logViewer.viewport.Height = 1
-		room := m.layout.Height - lipgloss.Height(probe.View()) + 1
-		fits := room >= 0
-		if m.report != nil {
-			fits = room >= cleanerLogMinHeight
-		}
-		if fits || level == compactWithoutSubtitle {
-			m.compactLevel = level
-			if m.report != nil {
-				m.logViewer.SetSize(m.layout.Width, common.MinInt(cleanerLogMaxHeight, common.MaxInt(cleanerLogMinHeight, room)))
-			}
-			return
-		}
-	}
-}
-
-func (m CleanerModel) mouseInLogViewer(msg tea.MouseMsg) bool {
-	if m.report == nil {
-		return false
-	}
-
-	view := m.View()
-	index := strings.Index(view, "Recent activity\n")
-	if index < 0 {
-		return false
-	}
-
-	top := strings.Count(view[:index], "\n")
-	bottom := top + 1 + m.logViewer.viewport.Height
-	return msg.Y >= top && msg.Y <= bottom
-}
-
-func (m *CleanerModel) moveOptions(delta int) {
-	if m.state != StateFinished {
-		m.state = StateSelectingOptions
-	}
-
-	if delta > 0 {
+func (m CleanerModel) updateOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, common.DefaultKeys.Up):
+		m.optionsList = m.optionsList.MoveUp()
+	case key.Matches(msg, common.DefaultKeys.Down):
 		m.optionsList = m.optionsList.MoveDown()
-		return
+	case key.Matches(msg, common.DefaultKeys.Space):
+		return m.toggleFocusedOption()
+	case key.Matches(msg, common.DefaultKeys.Enter):
+		return m.openModePrompt()
 	}
-
-	m.optionsList = m.optionsList.MoveUp()
-}
-
-func (m CleanerModel) openModePrompt() (tea.Model, tea.Cmd) {
-	m.syncOptionsFromList()
-
-	m.state = StatePromptingMode
-	m.modeSelection = cleanupModeDryRun
-	m.err = nil
-	m.notice = ""
-
 	return m, nil
 }
 
-func (m CleanerModel) updateExecuteConfirmation(msg tea.KeyMsg, cmds ...tea.Cmd) (tea.Model, tea.Cmd) {
+func (m CleanerModel) updateFinished(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case m.logViewer.IsKeyScrollInput(msg):
+		var cmd tea.Cmd
+		m.logViewer, cmd = m.logViewer.Update(msg)
+		return m, cmd
+	case key.Matches(msg, m.keyMap.ToggleSkipped):
+		m.logViewer.ToggleFolded(logSectionSkipped)
+	case key.Matches(msg, m.keyMap.BackToOptions):
+		m.state = StateSelectingOptions
+	}
+	return m, nil
+}
+
+func (m CleanerModel) updateExecuteConfirmation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, common.DefaultKeys.Yes):
 		m.options.Execute = true
 		return m.startRun()
-	case key.Matches(msg, m.keyMap.CancelPrompt):
-		m.state = StateSelectingOptions
-		return m, nil
+	case key.Matches(msg, m.keyMap.CancelConfirm):
+		return m.cancelExecuteConfirmation()
 	case key.Matches(msg, common.DefaultKeys.Up, m.keyMap.ConfirmPrev):
 		m.confirmation = executeConfirmationSelection(wrapIndex(int(m.confirmation)-1, int(confirmationCount)))
 	case key.Matches(msg, common.DefaultKeys.Down, m.keyMap.ConfirmNext):
@@ -577,26 +393,27 @@ func (m CleanerModel) updateExecuteConfirmation(msg tea.KeyMsg, cmds ...tea.Cmd)
 			m.options.Execute = true
 			return m.startRun()
 		}
-		m.state = StateSelectingOptions
+		return m.cancelExecuteConfirmation()
 	case key.Matches(msg, m.keyMap.Run):
 		m.options.Execute = false
 		return m.startRun()
-	default:
-		return m, batch(cmds...)
 	}
-
 	return m, nil
 }
 
-func (m CleanerModel) updateModePrompt(msg tea.KeyMsg, cmds ...tea.Cmd) (tea.Model, tea.Cmd) {
+func (m CleanerModel) cancelExecuteConfirmation() (tea.Model, tea.Cmd) {
+	m.state = StateSelectingOptions
+	m.notice = "Canceled; nothing was deleted."
+	return m, nil
+}
+
+func (m CleanerModel) updateModePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case key.Matches(msg, m.keyMap.Run):
 		m.options.Execute = false
 		return m.startRun()
 	case key.Matches(msg, m.keyMap.Execute):
-		m.state = StateConfirmingExecute
-		m.confirmation = confirmationCancel
-		m.err = nil
+		m.openExecuteConfirmation()
 	case key.Matches(msg, m.keyMap.CancelPrompt):
 		m.state = StateSelectingOptions
 	case key.Matches(msg, common.DefaultKeys.Up, m.keyMap.ConfirmPrev):
@@ -609,16 +426,26 @@ func (m CleanerModel) updateModePrompt(msg tea.KeyMsg, cmds ...tea.Cmd) (tea.Mod
 			m.options.Execute = false
 			return m.startRun()
 		case cleanupModeExecute:
-			m.state = StateConfirmingExecute
-			m.confirmation = confirmationCancel
-			m.err = nil
+			m.openExecuteConfirmation()
 		case cleanupModeCancel:
 			m.state = StateSelectingOptions
 		}
-	default:
-		return m, batch(cmds...)
 	}
+	return m, nil
+}
 
+func (m *CleanerModel) openExecuteConfirmation() {
+	m.state = StateConfirmingExecute
+	m.confirmation = confirmationCancel
+	m.err = nil
+}
+
+func (m CleanerModel) openModePrompt() (tea.Model, tea.Cmd) {
+	m.syncOptionsFromList()
+	m.state = StatePromptingMode
+	m.modeSelection = cleanupModeDryRun
+	m.err = nil
+	m.notice = ""
 	return m, nil
 }
 
@@ -627,17 +454,11 @@ func (m CleanerModel) toggleFocusedOption() (tea.Model, tea.Cmd) {
 	m.optionsList, cmd = m.optionsList.ToggleSelected()
 	m.syncOptionsFromList()
 	m.notice = ""
-
 	return m, cmd
 }
 
 func (m *CleanerModel) syncOptionsFromList() {
-	m.options.CleanSSHKeys = m.optionsList.Checked(optionSSHKeys)
-	m.options.IncludeBrowserProfiles = m.optionsList.Checked(optionBrowserProfiles)
-	m.options.CleanCredentialManager = m.optionsList.Checked(optionCredentialManager)
-	m.options.ForceStopProcesses = m.optionsList.Checked(optionForceStop)
-	m.options.CleanShellHistory = m.optionsList.Checked(optionShellHistory)
-	m.options.FullToolReset = m.optionsList.Checked(optionFullToolReset)
+	m.options = m.syncedOptions()
 }
 
 func (m CleanerModel) syncedOptions() cleaner.Options {
@@ -651,10 +472,6 @@ func (m CleanerModel) syncedOptions() cleaner.Options {
 	return options
 }
 
-func (m CleanerModel) renderHelp() string {
-	return m.help.View(m.keyMap.contextual(m.state))
-}
-
 func (m CleanerModel) startRun() (tea.Model, tea.Cmd) {
 	m.state = StateRunning
 	m.report = nil
@@ -662,6 +479,7 @@ func (m CleanerModel) startRun() (tea.Model, tea.Cmd) {
 	m.canceled = false
 	m.notice = ""
 	m.options = m.syncedOptions()
+	m.startedAt = time.Now()
 
 	options := m.options
 	ctx, cancel := context.WithTimeout(context.Background(), cleanerRunTimeout)
@@ -686,119 +504,432 @@ func (m CleanerModel) OwnsKeys() bool {
 	return m.Running() || m.state == StatePromptingMode || m.state == StateConfirmingExecute
 }
 
-func (m *LogViewerModel) SetSize(width, height int) {
+func (m CleanerModel) Breadcrumb() []string {
+	if m.width > 0 && m.width < cleanerShortTitleMaxWidth {
+		return []string{cleanerShortTitle}
+	}
+	return []string{cleanerTitle}
+}
+
+func (m CleanerModel) FooterKeys() help.KeyMap {
+	return cleanerContextualKeyMap{
+		cleanerKeyMap:  m.keyMap,
+		state:          m.state,
+		canFoldSkipped: m.report != nil && notPresentCount(*m.report) > 0,
+	}
+}
+
+func (m CleanerModel) FooterStatus() string {
+	switch m.state {
+	case StateSelectingOptions:
+		return fmt.Sprintf("%d/%d checked", m.checkedCount(), m.optionsList.Len())
+	case StatePromptingMode:
+		switch m.modeSelection {
+		case cleanupModeDryRun:
+			return modePill(false)
+		case cleanupModeExecute:
+			return modePill(true)
+		}
+		return ""
+	case StateConfirmingExecute:
+		return modePill(true)
+	default:
+		return modePill(m.options.Execute)
+	}
+}
+
+func modePill(execute bool) string {
+	if execute {
+		return common.Pill("EXECUTE", common.ToneDanger)
+	}
+	return common.Pill("DRY-RUN", common.ToneAccent)
+}
+
+func (m CleanerModel) checkedCount() int {
+	count := 0
+	for _, option := range cleanerOptionSummaries() {
+		if m.optionsList.Checked(option.id) {
+			count++
+		}
+	}
+	return count
+}
+
+func (m CleanerModel) bodySize() (int, int) {
+	width, height := m.width, m.height
 	if width <= 0 {
 		width = common.DefaultContentWidth
 	}
 	if height <= 0 {
-		height = defaultLogViewportHeight
+		height = cleanerDefaultBodyHeight
 	}
-
-	if width == m.viewport.Width && height == m.viewport.Height {
-		return
-	}
-
-	atBottom := m.viewport.AtBottom()
-	m.viewport.Width = width
-	m.viewport.Height = height
-	m.refreshContent()
-	if atBottom {
-		m.viewport.GotoBottom()
-	}
+	return width, height
 }
 
-func (m *LogViewerModel) SetReport(report cleaner.Report) {
-	m.report = &report
-	m.refreshContent()
-	m.viewport.GotoBottom()
-}
-
-func (m *LogViewerModel) SetMouseFocused(focused bool) {
-	m.mouseFocused = focused
-}
-
-func (m *LogViewerModel) refreshContent() {
-	if m.report == nil {
-		return
+func (m CleanerModel) View() string {
+	width, height := m.bodySize()
+	notice := m.renderNotice(width)
+	contentHeight := height - lipgloss.Height(notice)
+	if notice == "" {
+		contentHeight = height
 	}
 
-	m.viewport.SetContent(renderActivity(*m.report, m.viewport.Width))
-}
-
-func (m LogViewerModel) Update(msg tea.Msg) (LogViewerModel, tea.Cmd) {
-	if m.report == nil {
-		return m, nil
-	}
-
-	var cmd tea.Cmd
-	m.viewport, cmd = m.viewport.Update(msg)
-	return m, cmd
-}
-
-func (m LogViewerModel) IsKeyScrollInput(msg tea.KeyMsg) bool {
-	if m.report == nil {
-		return false
-	}
-
-	switch {
-	case key.Matches(msg, m.viewport.KeyMap.Up, m.viewport.KeyMap.PageUp, m.viewport.KeyMap.HalfPageUp):
-		return true
-	case key.Matches(msg, m.viewport.KeyMap.Down, m.viewport.KeyMap.PageDown, m.viewport.KeyMap.HalfPageDown):
-		return true
-	}
-
-	return false
-}
-
-func (m LogViewerModel) IsFocusedMouseScrollInput(msg tea.MouseMsg) bool {
-	if m.report == nil || !m.mouseFocused || !m.viewport.MouseWheelEnabled || msg.Action != tea.MouseActionPress {
-		return false
-	}
-
-	switch msg.Button {
-	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
-		return true
+	var content string
+	switch m.state {
+	case StateRunning:
+		content = m.renderRunning(width)
+	case StateFinished:
+		content = m.renderResult(width)
 	default:
-		return false
+		content = m.renderOptionsFitted(width, contentHeight)
+	}
+
+	if notice == "" {
+		return common.FitHeight(content, height)
+	}
+	return common.FitHeight(content, contentHeight) + "\n" + notice
+}
+
+func (m CleanerModel) renderNotice(width int) string {
+	if m.notice == "" {
+		return ""
+	}
+	return common.Notice(width, common.ToneWarning, m.notice)
+}
+
+func (m CleanerModel) renderOptionsFitted(width, height int) string {
+	var body string
+	for fit := fitFull; fit <= fitDialogOnly; fit++ {
+		if fit == fitDialogOnly && m.state == StateSelectingOptions {
+			break
+		}
+		body = m.renderOptions(width, height, fit)
+		if lipgloss.Height(body) <= height {
+			return body
+		}
+	}
+	return body
+}
+
+func (m CleanerModel) renderOptions(width, height int, fit optionsFit) string {
+	var blocks []string
+	if fit < fitWithoutSubtitle {
+		blocks = append(blocks, common.RenderWrapped(width, cleanerSubtitle, common.Muted.Render), "")
+	}
+
+	if width >= cleanerTwoColumnMinWidth && fit < fitDialogOnly {
+		leftWidth := common.MaxInt(width*45/100, cleanerOptionsPanelMinWidth)
+		rightWidth := width - leftWidth - 1
+		left := m.renderOptionsPanel(leftWidth, 0)
+		right := []string{m.renderActionPanel(rightWidth, fit)}
+		if fit < fitWithoutNotes {
+			right = append(right, common.Panel{Title: "Always", Width: rightWidth}.Render(m.renderNotes(rightWidth-4)))
+		}
+		blocks = append(blocks, lipgloss.JoinHorizontal(lipgloss.Top, left, " ", lipgloss.JoinVertical(lipgloss.Left, right...)))
+		return strings.Join(blocks, "\n")
+	}
+
+	action := m.renderActionPanel(width, fit)
+	if fit < fitDialogOnly {
+		listHeight := 0
+		if fit >= fitScrollList {
+			used := lipgloss.Height(strings.Join(blocks, "\n")) + lipgloss.Height(action)
+			if len(blocks) == 0 {
+				used = lipgloss.Height(action)
+			}
+			listHeight = common.MaxInt(1, height-used-2)
+		}
+		blocks = append(blocks, m.renderOptionsPanel(width, listHeight))
+	}
+	blocks = append(blocks, action)
+	if fit < fitWithoutNotes {
+		blocks = append(blocks, m.renderNotes(width))
+	}
+	return strings.Join(blocks, "\n")
+}
+
+func (m CleanerModel) renderOptionsPanel(width, listHeight int) string {
+	variant := common.PanelNormal
+	if m.state == StateSelectingOptions {
+		variant = common.PanelFocused
+	}
+	panel := common.Panel{
+		Title:   "Options",
+		Meta:    fmt.Sprintf("%d/%d", m.checkedCount(), m.optionsList.Len()),
+		Variant: variant,
+		Width:   width,
+	}
+	list := m.optionsList
+	if listHeight <= 0 {
+		listHeight = list.Len()
+	}
+	list.SetSize(panel.InnerWidth(), listHeight)
+	list.SetFocused(m.state == StateSelectingOptions)
+	return panel.Render(list.View())
+}
+
+func (m CleanerModel) renderActionPanel(width int, fit optionsFit) string {
+	switch m.state {
+	case StatePromptingMode:
+		return m.renderModePanel(width)
+	case StateConfirmingExecute:
+		return m.renderExecuteConfirmation(width)
+	default:
+		return m.renderDetailPanel(width, fit >= fitShortDetails)
 	}
 }
 
-func (m LogViewerModel) View() string {
+func (m CleanerModel) renderDetailPanel(width int, short bool) string {
+	selected := m.optionsList.Selected()
+	panel := common.Panel{Title: selected.Label, Width: width}
+	var lines []string
+	for _, detail := range selected.Details {
+		lines = append(lines, common.WrapPlain(detail, panel.InnerWidth())...)
+	}
+	if short && len(lines) > cleanerShortDetailLines {
+		lines = lines[:cleanerShortDetailLines]
+		lines[cleanerShortDetailLines-1] = common.Truncate(lines[cleanerShortDetailLines-1]+"…", panel.InnerWidth())
+	}
+	return panel.Render(strings.Join(lines, "\n"))
+}
+
+func (m CleanerModel) renderModePanel(width int) string {
+	panel := common.Panel{Title: "Run cleanup", Variant: common.PanelFocused, Width: width}
+	inner := panel.InnerWidth()
+	lines := []string{
+		common.RenderPlainWrapped(inner, "Choose cleanup mode for the selected options."),
+		common.RenderPlainWrapped(inner, "Selected: "+m.selectedSummary()),
+	}
+	if m.optionsList.Checked(optionForceStop) {
+		lines = append(lines, common.Notice(inner, common.ToneWarning, "Force stop is on: running browsers and IDEs are stopped in dry-run too."))
+	}
+	lines = append(lines,
+		"",
+		common.RenderChoices(inner, []common.Choice{
+			{Label: "Dry-run", Detail: "only list what would be deleted"},
+			{Label: "Execute", Detail: "delete matching files (asks again)"},
+			{Label: "Cancel", Detail: "back to options"},
+		}, int(m.modeSelection)),
+	)
+	return panel.Render(strings.Join(lines, "\n"))
+}
+
+func (m CleanerModel) renderExecuteConfirmation(width int) string {
+	lines := []string{"Execute mode will delete matching local files. Choose an option and press enter."}
+	for _, item := range m.executeItems() {
+		lines = append(lines, "• "+item)
+	}
+	lines = append(lines, cleanerSafetyNotice, "Not undoable. Run a dry-run first to see the exact list.")
+	return common.ConfirmDialog(width, "Delete files", lines, []string{"Cancel", "Run execute cleanup"}, int(m.confirmation))
+}
+
+func (m CleanerModel) executeItems() []string {
+	items := []string{"Baseline credential and token files"}
+	for _, option := range cleanerOptionSummaries() {
+		if m.optionsList.Checked(option.id) {
+			items = append(items, option.summary)
+		}
+	}
+	return items
+}
+
+func (m CleanerModel) selectedSummary() string {
+	var selected []string
+	for _, option := range cleanerOptionSummaries() {
+		if m.optionsList.Checked(option.id) {
+			selected = append(selected, strings.ToLower(option.summary[:1])+option.summary[1:])
+		}
+	}
+	if len(selected) == 0 {
+		return "baseline only"
+	}
+	return "baseline, " + strings.Join(selected, ", ")
+}
+
+func (m CleanerModel) renderNotes(width int) string {
+	return common.RenderWrapped(width, cleanerBaselineNote+" "+cleanerSafetyNotice, common.Muted.Render)
+}
+
+func (m CleanerModel) renderRunning(width int) string {
+	label := "Running dry-run cleanup…"
+	note := "Dry-run only lists deletions; nothing is deleted."
+	if m.options.Execute {
+		label = "Running execute cleanup…"
+		note = "Execute deletes matching files inside your user profile."
+	}
+	return common.RunStatus(width, m.spinner.View(), label, note, m.elapsed())
+}
+
+func (m CleanerModel) elapsed() time.Duration {
+	if m.startedAt.IsZero() {
+		return 0
+	}
+	return time.Since(m.startedAt)
+}
+
+func (m CleanerModel) renderResult(width int) string {
+	header := m.renderResultHeader(width)
+	panel := common.Panel{Title: "Activity", Meta: m.logViewer.Position(), Width: width}
+	if !m.logViewer.HasContent() {
+		return header + "\n" + panel.Render(common.Muted.Italic(true).Render("No activity"))
+	}
+	panel.Height = common.MinInt(m.logViewer.Height(), m.logViewer.TotalLines()) + 2
+	return header + "\n" + panel.Render(m.logViewer.View())
+}
+
+func (m CleanerModel) renderResultHeader(width int) string {
 	if m.report == nil {
 		return ""
 	}
-
-	var b strings.Builder
 	report := *m.report
-	width := m.viewport.Width
-	if width <= 0 {
-		width = common.DefaultContentWidth
-	}
-
-	b.WriteString(common.Success.Render("Last run"))
-	b.WriteString("\n")
+	lines := []string{m.renderResultSummary(width), common.RenderCounts(width, cleanerCounts(report, m.options.Execute))}
 	if report.LogPath != "" {
-		for _, line := range common.WrapLine("  log: ", report.LogPath, width) {
-			b.WriteString(line)
-			b.WriteString("\n")
+		lines = append(lines, strings.Join(common.WrapLine("log ", displayPath(m.home, report.LogPath), width), "\n"))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m CleanerModel) renderResultSummary(width int) string {
+	switch {
+	case m.canceled:
+		return common.Notice(width, common.ToneWarning, "Canceled. The run stopped early; the activity below shows what it did before it stopped.")
+	case m.err != nil:
+		return common.Notice(width, common.ToneDanger, "Completed with errors · see ERRORS below")
+	case m.options.Execute:
+		return common.Notice(width, common.ToneSuccess, fmt.Sprintf("Execute finished · %d deleted", m.report.Deleted))
+	default:
+		return common.Notice(width, common.ToneSuccess, "Dry-run finished · nothing was deleted")
+	}
+}
+
+func (m *CleanerModel) layoutComponents() {
+	width, height := m.bodySize()
+	inner := common.MaxInt(1, width-4)
+	activityHeight := height - 2 - lipgloss.Height(m.renderResultHeader(width))
+	if m.notice != "" {
+		activityHeight -= lipgloss.Height(m.renderNotice(width))
+	}
+	m.logViewer.SetSize(inner, common.MaxInt(cleanerActivityMinHeight, activityHeight))
+}
+
+func (m CleanerModel) mouseInActivity(msg tea.MouseMsg) bool {
+	if m.report == nil {
+		return false
+	}
+	width, _ := m.bodySize()
+	top := lipgloss.Height(m.renderResultHeader(width))
+	bottom := top + m.logViewer.Height() + 1
+	return msg.Y >= top && msg.Y <= bottom
+}
+
+func cleanerCounts(report cleaner.Report, execute bool) []common.Count {
+	removals := common.Count{Label: "would delete", N: report.DryRuns, Tone: common.ToneAccent}
+	if execute {
+		removals = common.Count{Label: "deleted", N: report.Deleted, Tone: common.ToneSuccess}
+	}
+	return []common.Count{
+		removals,
+		{Label: "skipped", N: report.Skipped, Tone: common.ToneSubtle},
+		{Label: "warnings", N: report.Warnings, Tone: common.ToneWarning},
+		{Label: "errors", N: report.Errors, Tone: common.ToneDanger},
+	}
+}
+
+func cleanerUnreportedError(report cleaner.Report, err error, canceled bool) error {
+	if err == nil || canceled || report.Errors > 0 {
+		return nil
+	}
+	return err
+}
+
+func cleanerLogSections(report cleaner.Report, unreported error, execute bool, home string) []common.LogSection {
+	errorsSection := common.LogSection{ID: logSectionErrors, Title: "ERRORS", Tone: common.ToneDanger}
+	warnings := common.LogSection{ID: logSectionWarnings, Title: "WARNINGS", Tone: common.ToneWarning}
+	removals := common.LogSection{ID: logSectionRemovals, Title: "WOULD DELETE", Glyph: "○", Tone: common.ToneAccent}
+	if execute {
+		removals.Title = "DELETED"
+		removals.Glyph = "−"
+		removals.Tone = common.ToneSuccess
+	}
+	skipped := common.LogSection{ID: logSectionSkipped, Title: "SKIPPED", Glyph: "·", Tone: common.ToneSubtle}
+	notes := common.LogSection{ID: logSectionNotes, Title: "NOTES", Glyph: "i", Tone: common.ToneSubtle}
+
+	for _, entry := range report.Entries {
+		switch entry.Level {
+		case cleaner.LevelError:
+			errorsSection.Lines = append(errorsSection.Lines, common.LogLine{Tone: common.ToneDanger, Text: entry.Message})
+		case cleaner.LevelWarn:
+			warnings.Lines = append(warnings.Lines, common.LogLine{Tone: common.ToneWarning, Text: entry.Message})
+		case cleaner.LevelDelete, cleaner.LevelDryRun:
+			removals.Lines = append(removals.Lines, removalLine(entry, home))
+		case cleaner.LevelSkip:
+			if entry.NotPresent {
+				skipped.Folded = append(skipped.Folded, common.LogLine{Tone: common.ToneSubtle, Text: entry.Target, Detail: displayPath(home, entry.Path)})
+				continue
+			}
+			skipped.Lines = append(skipped.Lines, common.LogLine{Tone: common.ToneSubtle, Text: entry.Message})
+		default:
+			notes.Lines = append(notes.Lines, common.LogLine{Tone: common.ToneSubtle, Text: entry.Message})
 		}
 	}
-	stats := fmt.Sprintf("dry-run: %d  deleted: %d  skipped: %d  warnings: %d  errors: %d",
-		report.DryRuns,
-		report.Deleted,
-		report.Skipped,
-		report.Warnings,
-		report.Errors,
-	)
-	for _, line := range common.WrapLine("  ", stats, width) {
-		b.WriteString(line)
-		b.WriteString("\n")
+	if unreported != nil {
+		for _, line := range strings.Split(unreported.Error(), "\n") {
+			errorsSection.Lines = append(errorsSection.Lines, common.LogLine{Tone: common.ToneDanger, Text: line})
+		}
 	}
-	b.WriteString("\n")
-	b.WriteString("Recent activity\n")
-	b.WriteString(m.viewport.View())
+	if len(skipped.Folded) > 0 {
+		skipped.FoldedSummary = fmt.Sprintf("%d not present (s to show)", len(skipped.Folded))
+		if len(skipped.Lines) > 0 {
+			skipped.FoldedSummary += fmt.Sprintf(", %d shown below", len(skipped.Lines))
+		}
+	}
 
-	return b.String()
+	var sections []common.LogSection
+	for _, section := range []common.LogSection{errorsSection, warnings, removals, skipped, notes} {
+		if len(section.Lines) > 0 || len(section.Folded) > 0 {
+			sections = append(sections, section)
+		}
+	}
+	return sections
+}
+
+func removalLine(entry cleaner.Entry, home string) common.LogLine {
+	if entry.Target == "" {
+		return common.LogLine{Text: entry.Message}
+	}
+	if entry.LinkTarget != "" {
+		return common.LogLine{Text: entry.Target + " (link only)", Detail: displayPath(home, entry.Path) + " → " + displayPath(home, entry.LinkTarget) + " kept"}
+	}
+	return common.LogLine{Text: entry.Target, Detail: displayPath(home, entry.Path)}
+}
+
+func notPresentCount(report cleaner.Report) int {
+	count := 0
+	for _, entry := range report.Entries {
+		if entry.NotPresent {
+			count++
+		}
+	}
+	return count
+}
+
+func displayPath(home, path string) string {
+	if home == "" {
+		return path
+	}
+	rel, err := filepath.Rel(home, path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return path
+	}
+	return filepath.Join("~", rel)
+}
+
+func trimmedSpinner(base spinner.Spinner) spinner.Spinner {
+	frames := make([]string, len(base.Frames))
+	for i, frame := range base.Frames {
+		frames[i] = strings.TrimSpace(frame)
+	}
+	return spinner.Spinner{Frames: frames, FPS: base.FPS}
 }
 
 func runCleaner(ctx context.Context, run CleanerRunFunc, options cleaner.Options) tea.Cmd {
@@ -823,42 +954,6 @@ func cancelingNotice(subject string, quitAfter bool) string {
 	return "Canceling " + subject + "..."
 }
 
-func renderActivity(report cleaner.Report, width int) string {
-	if len(report.Entries) == 0 {
-		return common.Muted.Render("  No activity")
-	}
-
-	if width <= 0 {
-		width = common.DefaultContentWidth
-	}
-
-	var b strings.Builder
-	for _, entry := range report.Entries {
-		prefix := fmt.Sprintf("  [%s] ", entry.Level)
-		for _, line := range common.WrapLine(prefix, entry.Message, width) {
-			b.WriteString(styleActivityLine(entry.Level, line))
-			b.WriteString("\n")
-		}
-	}
-
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func styleActivityLine(level cleaner.Level, line string) string {
-	switch level {
-	case cleaner.LevelWarn:
-		return common.Warning.Render(line)
-	case cleaner.LevelError:
-		return common.Error.Render(line)
-	case cleaner.LevelDelete:
-		return common.Success.Render(line)
-	case cleaner.LevelDryRun:
-		return common.Accent.Render(line)
-	default:
-		return common.Muted.Render(line)
-	}
-}
-
 func cleanerRow(selected bool, marker, label string) string {
 	cursor := " "
 	renderedLabel := label
@@ -875,9 +970,9 @@ func confirmationRow(selected bool, label string) string {
 	return cleanerRow(selected, "", label)
 }
 
-func credentialManagerHint() string {
+func credentialManagerTag() string {
 	if runtime.GOOS != osWindows {
-		return " (Windows only)"
+		return "Windows only"
 	}
 	return ""
 }

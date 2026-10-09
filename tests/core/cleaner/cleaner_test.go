@@ -35,6 +35,15 @@ func TestRunDryRunKeepsExistingTargetsWithoutWritingDefaultLog(t *testing.T) {
 	if report.DryRuns == 0 {
 		t.Fatalf("expected at least one dry-run entry, got %#v", report)
 	}
+	listed, ok := entryForPath(report, target)
+	if !ok || listed.Level != cleaner.LevelDryRun || listed.Target == "" || listed.NotPresent {
+		t.Fatalf("expected a dry-run entry carrying the target label and path %q, got %#v", target, listed)
+	}
+	missing := filepath.Join(home, ".npmrc")
+	absent, ok := entryForPath(report, missing)
+	if !ok || absent.Level != cleaner.LevelSkip || !absent.NotPresent || absent.Target == "" {
+		t.Fatalf("expected a not-present skip entry for %q, got %#v", missing, absent)
+	}
 	if report.Deleted != 0 {
 		t.Fatalf("dry-run should not delete files, deleted=%d", report.Deleted)
 	}
@@ -119,6 +128,10 @@ func TestRunExecuteRefusesTargetBehindLinkThatLeavesHome(t *testing.T) {
 	if !hasEntry(report, cleaner.LevelSkip, outside) {
 		t.Fatalf("expected a SKIP entry naming %q, got %#v", outside, report.Entries)
 	}
+	refused, ok := entryForPath(report, filepath.Join(home, ".config", "gh", "hosts.yml"))
+	if !ok || refused.Level != cleaner.LevelSkip || refused.NotPresent {
+		t.Fatalf("expected the refused link to be a skip that is not marked not present, got %#v", refused)
+	}
 }
 
 func TestRunSSHCleanupFindsPrivateKeysByHeaderOnly(t *testing.T) {
@@ -196,6 +209,10 @@ func TestRunExecuteRemovesSymlinkAndReportsTargetKept(t *testing.T) {
 	}
 	if !hasEntry(report, cleaner.LevelDelete, "symlink") || !hasEntry(report, cleaner.LevelDelete, dotfile) {
 		t.Fatalf("expected a delete entry naming the symlink and its kept target, got %#v", report.Entries)
+	}
+	removed, ok := entryForPath(report, filepath.Join(linkedHome, ".npmrc"))
+	if !ok || removed.Level != cleaner.LevelDelete || removed.LinkTarget != dotfile {
+		t.Fatalf("expected the symlink delete entry to carry its kept target %q, got %#v", dotfile, removed)
 	}
 }
 
@@ -484,6 +501,15 @@ func hasEntry(report cleaner.Report, level cleaner.Level, text string) bool {
 		}
 	}
 	return false
+}
+
+func entryForPath(report cleaner.Report, path string) (cleaner.Entry, bool) {
+	for _, entry := range report.Entries {
+		if entry.Path == path {
+			return entry, true
+		}
+	}
+	return cleaner.Entry{}, false
 }
 
 func assertLogContains(t *testing.T, path string, want string) {

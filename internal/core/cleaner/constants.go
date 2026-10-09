@@ -55,4 +55,5 @@ const (
 	targetLabelBrowserProfile         = "browser profile"
 	targetLabelBrowserProfileRoot     = "browser profile root"
 	targetLabelFirefoxBrowserProfiles = "Firefox browser profiles"
+	targetLabelCredentialManagerEntry = "Windows Credential Manager entry"
 )
