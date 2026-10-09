@@ -42,6 +42,25 @@ func TestDeveloperTargetsIncludeIDEAndCopilotData(t *testing.T) {
 	assertTarget(t, targets, filepath.Join(home, ".github-copilot"), targetLabelCopilotAuthCacheData)
 }
 
+func TestBrowserTargetsIncludeLinuxEdgeAndFlatpakBrowsers(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("Linux and Flatpak browser paths are not used on Windows")
+	}
+	home := t.TempDir()
+	fs := envOnlyFS{}
+
+	profiles := browserProfileTargets(home, fs)
+	assertTarget(t, profiles, filepath.Join(home, ".config", "microsoft-edge"), targetLabelBrowserProfileRoot)
+	assertTarget(t, profiles, filepath.Join(home, ".var", "app", "com.microsoft.Edge", "config", "microsoft-edge"), targetLabelBrowserProfileRoot)
+	assertTarget(t, profiles, filepath.Join(home, ".var", "app", "com.google.Chrome", "config", "google-chrome"), targetLabelBrowserProfileRoot)
+	assertTarget(t, profiles, filepath.Join(home, ".var", "app", "org.mozilla.firefox", ".mozilla", "firefox"), targetLabelBrowserProfile)
+
+	caches := browserCacheTargets(home, fs)
+	assertTarget(t, caches, filepath.Join(home, ".cache", "microsoft-edge"), targetLabelBrowserCache)
+	assertTarget(t, caches, filepath.Join(home, ".cache", "BraveSoftware", "Brave-Browser"), targetLabelBrowserCache)
+	assertTarget(t, caches, filepath.Join(home, ".var", "app", "com.microsoft.Edge", "cache", "microsoft-edge"), targetLabelBrowserCache)
+}
+
 func TestCredentialManagerAllowlistIncludesVisualStudioAndCopilot(t *testing.T) {
 	for _, target := range []string{
 		"vscodevscode.github-authentication",

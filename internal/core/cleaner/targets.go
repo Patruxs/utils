@@ -418,16 +418,41 @@ func browserCacheTargets(home string, fs FileSystem) []targetPath {
 		})
 	}
 
-	return []targetPath{
-		{filepath.Join(home, ".cache", "google-chrome"), targetLabelBrowserCache},
-		{filepath.Join(home, ".cache", "chromium"), targetLabelBrowserCache},
+	var targets []targetPath
+	for _, dir := range linuxChromiumBrowserDirs(home, "cache") {
+		targets = append(targets, targetPath{dir, targetLabelBrowserCache})
+	}
+
+	return append(targets, []targetPath{
 		{filepath.Join(home, ".cache", "mozilla", "firefox"), targetLabelBrowserCache},
+		{filepath.Join(home, ".var", "app", flatpakFirefoxID, "cache", "mozilla", "firefox"), targetLabelBrowserCache},
 		{filepath.Join(home, "Library", "Caches", "Google", "Chrome"), targetLabelBrowserCache},
 		{filepath.Join(home, "Library", "Caches", "Microsoft Edge"), targetLabelBrowserCache},
 		{filepath.Join(home, "Library", "Caches", "BraveSoftware", "Brave-Browser"), targetLabelBrowserCache},
 		{filepath.Join(home, "Library", "Caches", "Firefox"), targetLabelBrowserCache},
 		{filepath.Join(home, "Library", "Caches", "com.apple.Safari"), targetLabelBrowserCache},
+	}...)
+}
+
+var linuxChromiumBrowsers = []struct {
+	flatpakID string
+	dir       []string
+}{
+	{"com.google.Chrome", []string{"google-chrome"}},
+	{"org.chromium.Chromium", []string{"chromium"}},
+	{"com.microsoft.Edge", []string{"microsoft-edge"}},
+	{"com.brave.Browser", []string{"BraveSoftware", "Brave-Browser"}},
+}
+
+func linuxChromiumBrowserDirs(home string, kind string) []string {
+	var dirs []string
+	for _, browser := range linuxChromiumBrowsers {
+		dirs = append(dirs, filepath.Join(append([]string{home, "." + kind}, browser.dir...)...))
 	}
+	for _, browser := range linuxChromiumBrowsers {
+		dirs = append(dirs, filepath.Join(append([]string{home, ".var", "app", browser.flatpakID, kind}, browser.dir...)...))
+	}
+	return dirs
 }
 
 func browserProfileTargets(home string, fs FileSystem) []targetPath {
@@ -450,19 +475,17 @@ func browserProfileTargets(home string, fs FileSystem) []targetPath {
 		return compactTargets(targets)
 	}
 
-	for _, root := range []string{
-		filepath.Join(home, ".config", "google-chrome"),
-		filepath.Join(home, ".config", "chromium"),
-		filepath.Join(home, ".config", "BraveSoftware", "Brave-Browser"),
+	for _, root := range append(linuxChromiumBrowserDirs(home, "config"),
 		filepath.Join(home, "Library", "Application Support", "Google", "Chrome"),
 		filepath.Join(home, "Library", "Application Support", "Microsoft Edge"),
 		filepath.Join(home, "Library", "Application Support", "BraveSoftware", "Brave-Browser"),
-	} {
+	) {
 		targets = append(targets, browserProfileChildren(root, fs)...)
 	}
 
 	targets = append(targets,
 		targetPath{filepath.Join(home, ".mozilla", "firefox"), targetLabelBrowserProfile},
+		targetPath{filepath.Join(home, ".var", "app", flatpakFirefoxID, ".mozilla", "firefox"), targetLabelBrowserProfile},
 		targetPath{filepath.Join(home, "Library", "Application Support", "Firefox", "Profiles"), targetLabelBrowserProfile},
 		targetPath{filepath.Join(home, "Library", "Safari"), targetLabelBrowserProfile},
 	)

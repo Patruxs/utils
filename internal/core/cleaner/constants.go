@@ -10,6 +10,8 @@ const (
 
 	commandWaitDelay = 3 * time.Second
 
+	flatpakFirefoxID = "org.mozilla.firefox"
+
 	userPrivateDirPerm  os.FileMode = 0o700
 	userPrivateFilePerm os.FileMode = 0o600
 
