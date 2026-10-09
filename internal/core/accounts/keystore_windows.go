@@ -87,19 +87,18 @@ func readCredentialKey() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var credentialPtr uintptr
+	var credential *windowsCredential
 	ret, _, callErr := procCredRead.Call(
 		uintptr(unsafe.Pointer(target)),
 		uintptr(credTypeGeneric),
 		0,
-		uintptr(unsafe.Pointer(&credentialPtr)),
+		uintptr(unsafe.Pointer(&credential)),
 	)
 	if ret == 0 {
 		return nil, callErr
 	}
-	defer procCredFree.Call(credentialPtr)
+	defer procCredFree.Call(uintptr(unsafe.Pointer(credential)))
 
-	credential := (*windowsCredential)(unsafe.Pointer(credentialPtr))
 	if credential.CredentialBlobSize != vaultKeySize {
 		return nil, fmt.Errorf("invalid credential key length")
 	}
