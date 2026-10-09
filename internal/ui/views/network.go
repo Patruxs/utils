@@ -151,6 +151,7 @@ const (
 
 	defaultNetworkLogViewportHeight = 12
 	networkWideMinWidth             = 100
+	networkDialogMaxWidth           = 100
 	networkNarrowCrumbWidth         = 60
 	networkListMinRows              = 3
 	networkDetailMaxRows            = 4
@@ -280,7 +281,7 @@ func NewNetworkModelWithManager(manager corenetwork.NetworkManager) NetworkModel
 
 	model := NetworkModel{
 		spinner: spinner.New(
-			spinner.WithSpinner(spinner.Dot),
+			spinner.WithSpinner(trimmedSpinner(spinner.Dot)),
 			spinner.WithStyle(common.Accent),
 		),
 		keyMap:          newNetworkKeyMap(),
@@ -311,6 +312,14 @@ func newNetworkActionList() common.CheckboxListModel {
 	list.SetHideDetails(true)
 	list.SetFocused(true)
 	return list
+}
+
+func trimmedSpinner(base spinner.Spinner) spinner.Spinner {
+	frames := make([]string, len(base.Frames))
+	for index, frame := range base.Frames {
+		frames[index] = strings.TrimSpace(frame)
+	}
+	return spinner.Spinner{Frames: frames, FPS: base.FPS}
 }
 
 func networkActionKey(id networkActionID) string {
@@ -426,13 +435,14 @@ func (m NetworkModel) View() string {
 	}
 
 	var body string
+	dialogWidth := common.MinInt(width, networkDialogMaxWidth)
 	switch m.state {
 	case networkStateRunning:
-		body = m.runningView(width)
+		body = m.runningView(dialogWidth)
 	case networkStateEditingHostsAdd:
-		body = m.hostsFormView(width)
+		body = m.hostsFormView(dialogWidth)
 	case networkStateConfirmingWrite:
-		body = m.confirmView(width)
+		body = m.confirmView(dialogWidth)
 	case networkStateFinished:
 		body = m.resultView(width)
 	default:
@@ -452,7 +462,7 @@ func (m *NetworkModel) layoutComponents() {
 	}
 	listWidth, listRows := m.actionListSize(width, height)
 	m.actions.SetSize(listWidth, listRows)
-	inputWidth := common.MaxInt(10, width-len("│ ▸ domain  ")-4)
+	inputWidth := common.MaxInt(10, common.MinInt(width, networkDialogMaxWidth)-len("│ ▸ domain  ")-4)
 	m.hostDomainInput.Width = inputWidth
 	m.hostIPInput.Width = inputWidth
 	top := lipgloss.Height(m.resultSummary(width))
