@@ -752,7 +752,7 @@ func (m CleanerModel) renderRunning(width int) string {
 		label = "Running execute cleanup…"
 		note = "Execute deletes matching files inside your user profile."
 	}
-	return common.RunStatus(width, m.spinner.View(), label, note, m.elapsed())
+	return common.RunStatus(width, strings.TrimRight(m.spinner.View(), " "), label, note, m.elapsed())
 }
 
 func (m CleanerModel) elapsed() time.Duration {
@@ -892,11 +892,10 @@ func removalLine(entry cleaner.Entry, home string) common.LogLine {
 	if entry.Target == "" {
 		return common.LogLine{Text: entry.Message}
 	}
-	text := entry.Target
 	if entry.LinkTarget != "" {
-		text = "symlink for " + entry.Target + ", keeps " + displayPath(home, entry.LinkTarget)
+		return common.LogLine{Text: entry.Target + " (link only)", Detail: displayPath(home, entry.Path) + " → " + displayPath(home, entry.LinkTarget) + " kept"}
 	}
-	return common.LogLine{Text: text, Detail: displayPath(home, entry.Path)}
+	return common.LogLine{Text: entry.Target, Detail: displayPath(home, entry.Path)}
 }
 
 func notPresentCount(report cleaner.Report) int {
