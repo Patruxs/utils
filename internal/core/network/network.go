@@ -101,6 +101,14 @@ func NewNetworkManager(commands CommandRunner) NetworkManager {
 	return NetworkManager{commands: commands}.withDefaults()
 }
 
+func (m NetworkManager) WithOutputLines(onLine func(string)) NetworkManager {
+	m = m.withDefaults()
+	if _, ok := m.commands.(execCommandRunner); ok {
+		m.commands = execCommandRunner{onLine: onLine}
+	}
+	return m
+}
+
 func DefaultConfigOptions() ConfigOptions {
 	return CloudflareDNSOptions()
 }
@@ -1046,19 +1054,76 @@ ping -c 4 google.com
 `, pingTimeout)
 }
 
+const (
+	windowsFlushDNSCommand          = "ipconfig /flushdns"
+	windowsClearDNSCacheCommand     = "Clear-DnsClientCache"
+	windowsResetDNSServersCommand   = "Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ResetServerAddresses"
+	windowsTCPResetCommand          = "netsh int tcp reset"
+	windowsWinsockResetCommand      = "netsh winsock reset"
+	windowsTCPSetGlobalCommand      = "netsh int tcp set global $setting"
+	windowsAddDoHCommand            = "Add-DnsClientDohServerAddress -ServerAddress $dns.Server -DohTemplate $dns.Template -AllowFallbackToUdp $true -AutoUpgrade $true"
+	windowsSetDoHCommand            = "Set-DnsClientDohServerAddress -ServerAddress $dns.Server -DohTemplate $dns.Template -AllowFallbackToUdp $true -AutoUpgrade $true"
+	windowsRemoveDoHCommand         = "Remove-DnsClientDohServerAddress -ServerAddress $server.ServerAddress"
+	windowsBackupHostsCommand       = "Copy-Item -LiteralPath $hostsPath -Destination $backupPath"
+	windowsSaveHostsCommand         = "Copy-Item -LiteralPath $hostsPath -Destination $savedPath"
+	windowsRestoreHostsCommand      = "Copy-Item -LiteralPath $latest.FullName -Destination $hostsPath -Force"
+	windowsAppendHostsCommand       = "[System.IO.File]::AppendAllText($hostsPath, $prefix + $entry + $lineBreak, [System.Text.Encoding]::ASCII)"
+	windowsRewriteHostsCommand      = "[System.IO.File]::WriteAllLines($hostsPath, $kept, (New-Object System.Text.UTF8Encoding $false))"
+	windowsClearPersistentCommand   = "Remove-Item -Path $regPath -Recurse -Force"
+	windowsClearCachePathCommand    = "Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue"
+	windowsPersistentRegistryPath   = `HKCU:\Software\NetworkConfigTool`
+	windowsMTUOptimizeValue         = 1500
+	windowsSetMTUCommandFormat      = "Set-NetIPInterface -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -NlMtu %d"
+	windowsSetPersistentValueFormat = "Set-ItemProperty -Path $regPath -Name %q -Value %s"
+)
+
+var windowsOptimizeTCPSettings = []string{"autotuninglevel=normal", "rss=enabled", "timestamps=disabled", "ecncapability=enabled"}
+
+type windowsDoHServer struct {
+	server   string
+	template string
+}
+
+var windowsDoHServers = []windowsDoHServer{
+	{"1.1.1.1", "https://cloudflare-dns.com/dns-query"},
+	{"8.8.8.8", "https://dns.google/dns-query"},
+	{"9.9.9.9", "https://dns.quad9.net/dns-query"},
+}
+
+func windowsSetDNSServersCommand(opts ConfigOptions) string {
+	return fmt.Sprintf("Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses @(%s, %s)", powerShellQuote(opts.DNSPrimary), powerShellQuote(opts.DNSSecondary))
+}
+
+func windowsSetMTUCommand(mtu int) string {
+	return fmt.Sprintf(windowsSetMTUCommandFormat, mtu)
+}
+
+func windowsHostsEntryLine(ip, domain string) string {
+	return fmt.Sprintf("$entry = %s + [char]9 + %s + [char]9 + %s", powerShellQuote(ip), powerShellQuote(domain), powerShellQuote(HostsManagedMarker))
+}
+
+func windowsPersistentValueCommands(opts ConfigOptions) []string {
+	return []string{
+		fmt.Sprintf(windowsSetPersistentValueFormat, "DNSPrimary", powerShellQuote(opts.DNSPrimary)),
+		fmt.Sprintf(windowsSetPersistentValueFormat, "DNSSecondary", powerShellQuote(opts.DNSSecondary)),
+		fmt.Sprintf(windowsSetPersistentValueFormat, "DNSName", powerShellQuote(opts.DNSName)),
+		fmt.Sprintf(windowsSetPersistentValueFormat, "PersistentMode", "$true"),
+	}
+}
+
 func windowsSetDNSScript(opts ConfigOptions) string {
 	return fmt.Sprintf(`
 $ErrorActionPreference = "Stop"
 $adapters = Get-NetAdapter | Where-Object {$_.Status -eq "Up"}
 if (-not $adapters) { throw "No active adapters found." }
 foreach ($adapter in $adapters) {
-    Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ServerAddresses @(%s, %s)
+    %s
     Write-Output ("Set DNS on {0}" -f $adapter.Name)
 }
-ipconfig /flushdns | Out-Null
+%s | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "ipconfig /flushdns failed with exit code $LASTEXITCODE" }
-Clear-DnsClientCache
-`, powerShellQuote(opts.DNSPrimary), powerShellQuote(opts.DNSSecondary))
+%s
+`, windowsSetDNSServersCommand(opts), windowsFlushDNSCommand, windowsClearDNSCacheCommand)
 }
 
 const darwinNetworkServicesSnippet = `listing=$(networksetup -listallnetworkservices)
@@ -1088,6 +1153,56 @@ if [ -z "$connections" ]; then
   exit 1
 fi`
 
+const (
+	darwinSetDNSServersCommand    = `networksetup -setdnsservers "$service" "$DNS_PRIMARY" "$DNS_SECONDARY"`
+	darwinResetDNSServersCommand  = `networksetup -setdnsservers "$service" Empty`
+	darwinFlushCacheCommand       = "dscacheutil -flushcache"
+	darwinRestartResponderCommand = "killall -HUP mDNSResponder"
+	darwinSetMTUCommand           = `networksetup -setMTU "$port" "$MTU"`
+	darwinResetMTUCommand         = `networksetup -setMTUAndMediaAutomatically "$port"`
+
+	linuxNMSetDNSCommand             = `nmcli connection modify "$uuid" ipv4.dns "$DNS_PRIMARY $DNS_SECONDARY" ipv4.ignore-auto-dns yes`
+	linuxNMResetDNSCommand           = `nmcli connection modify "$uuid" ipv4.ignore-auto-dns no ipv4.dns ""`
+	linuxNMUpCommand                 = `nmcli connection up "$uuid"`
+	linuxResolvedSetDNSCommand       = `resolvectl dns "$link" "$DNS_PRIMARY" "$DNS_SECONDARY"`
+	linuxResolvedRevertCommand       = `resolvectl revert "$link"`
+	linuxResolvConfBackupCommand     = "cp -p /etc/resolv.conf /etc/resolv.conf.utils.bak"
+	linuxResolvConfWriteCommand      = `printf 'nameserver %s\nnameserver %s\n' "$DNS_PRIMARY" "$DNS_SECONDARY" > /etc/resolv.conf`
+	linuxResolvConfRestoreCommand    = "cp /etc/resolv.conf.utils.bak /etc/resolv.conf"
+	linuxResolvConfDropBackupCommand = "rm -f /etc/resolv.conf.utils.bak"
+	linuxSetMTUCommand               = `ip link set dev "$link" mtu "$MTU"`
+	linuxSetMTU1500Command           = `ip link set dev "$link" mtu 1500`
+
+	posixBackupHostsCommand       = `cp -p "$hosts" "$backup"`
+	posixSaveHostsCommand         = `cp -p "$hosts" "$saved"`
+	posixRestoreHostsCommand      = `cat "$latest" > "$hosts"`
+	posixRewriteHostsCommand      = `cat "$kept" > "$hosts"`
+	posixMakePersistentDirCommand = `mkdir -p "$dir"`
+	posixClearPersistentCommand   = `rm -f "${HOME}/.config/utils/network-persistent.conf"`
+	posixClearCachePathCommand    = `rm -rf "$path"/*`
+)
+
+type linuxDNSFlushTool struct {
+	tool    string
+	command string
+}
+
+var linuxDNSFlushTools = []linuxDNSFlushTool{
+	{"resolvectl", "resolvectl flush-caches"},
+	{"systemd-resolve", "systemd-resolve --flush-caches"},
+	{"nscd", "nscd -i hosts"},
+	{"dnsmasq", "service dnsmasq restart"},
+}
+
+var (
+	linuxOptimizeSysctlCommands = []string{"sysctl -w net.ipv4.tcp_moderate_rcvbuf=1", "sysctl -w net.ipv4.tcp_timestamps=0", "sysctl -w net.ipv4.tcp_ecn=1"}
+	linuxResetSysctlCommands    = []string{"sysctl -w net.ipv4.tcp_moderate_rcvbuf=1", "sysctl -w net.ipv4.tcp_timestamps=1", "sysctl -w net.ipv4.tcp_ecn=2"}
+)
+
+func posixAppendHostsCommand(ip, domain string) string {
+	return fmt.Sprintf(`printf '%%s\t%%s\t%%s\n' %s %s %s >> "$hosts"`, shellQuote(ip), shellQuote(domain), shellQuote(HostsManagedMarker))
+}
+
 func darwinSetDNSScript(opts ConfigOptions) string {
 	return fmt.Sprintf(`
 set -eu
@@ -1096,14 +1211,14 @@ DNS_SECONDARY=%s
 %s
 while IFS= read -r service; do
   [ -z "$service" ] && continue
-  networksetup -setdnsservers "$service" "$DNS_PRIMARY" "$DNS_SECONDARY"
+  %s
   echo "Set DNS on $service"
 done <<EOF
 $services
 EOF
-dscacheutil -flushcache
-killall -HUP mDNSResponder
-`, shellQuote(opts.DNSPrimary), shellQuote(opts.DNSSecondary), darwinNetworkServicesSnippet)
+%s
+%s
+`, shellQuote(opts.DNSPrimary), shellQuote(opts.DNSSecondary), darwinNetworkServicesSnippet, darwinSetDNSServersCommand, darwinFlushCacheCommand, darwinRestartResponderCommand)
 }
 
 func linuxSetDNSScript(opts ConfigOptions) string {
@@ -1118,8 +1233,8 @@ if command -v nmcli >/dev/null 2>&1; then
     if [ "$type" = loopback ]; then
       continue
     fi
-    nmcli connection modify "$uuid" ipv4.dns "$DNS_PRIMARY $DNS_SECONDARY" ipv4.ignore-auto-dns yes
-    nmcli connection up "$uuid" >/dev/null
+    %s
+    %s >/dev/null
     echo "Set DNS on NetworkManager connection $uuid ($type)"
     changed=$((changed + 1))
   done <<EOF
@@ -1132,83 +1247,82 @@ EOF
 elif command -v resolvectl >/dev/null 2>&1; then
   %s
   for link in $links; do
-    resolvectl dns "$link" "$DNS_PRIMARY" "$DNS_SECONDARY"
+    %s
     echo "Set DNS on $link through systemd-resolved (runtime only, lost on reboot)"
   done
 else
   if [ ! -e /etc/resolv.conf.utils.bak ]; then
-    cp -p /etc/resolv.conf /etc/resolv.conf.utils.bak
+    %s
     echo "Saved the original /etc/resolv.conf as /etc/resolv.conf.utils.bak"
   fi
-  printf 'nameserver %%s\nnameserver %%s\n' "$DNS_PRIMARY" "$DNS_SECONDARY" > /etc/resolv.conf
+  %s
   echo "Wrote /etc/resolv.conf"
 fi
-`, shellQuote(opts.DNSPrimary), shellQuote(opts.DNSSecondary), linuxActiveConnectionsSnippet, linuxActiveLinksSnippet)
+`, shellQuote(opts.DNSPrimary), shellQuote(opts.DNSSecondary), linuxActiveConnectionsSnippet, linuxNMSetDNSCommand, linuxNMUpCommand, linuxActiveLinksSnippet, linuxResolvedSetDNSCommand, linuxResolvConfBackupCommand, linuxResolvConfWriteCommand)
 }
 
 func windowsFlushDNSCacheScript() string {
-	return `
+	return fmt.Sprintf(`
 $ErrorActionPreference = "Stop"
-ipconfig /flushdns | Out-Null
+%s | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "ipconfig /flushdns failed with exit code $LASTEXITCODE" }
-Clear-DnsClientCache
-`
+%s
+`, windowsFlushDNSCommand, windowsClearDNSCacheCommand)
 }
 
 func darwinFlushDNSCacheScript() string {
-	return `
+	return fmt.Sprintf(`
 set -eu
-dscacheutil -flushcache
-killall -HUP mDNSResponder
-`
+%s
+%s
+`, darwinFlushCacheCommand, darwinRestartResponderCommand)
 }
 
 func linuxFlushDNSCacheScript() string {
-	return `
-set -eu
-if command -v resolvectl >/dev/null 2>&1; then
-  resolvectl flush-caches
-elif command -v systemd-resolve >/dev/null 2>&1; then
-  systemd-resolve --flush-caches
-elif command -v nscd >/dev/null 2>&1; then
-  nscd -i hosts
-elif command -v dnsmasq >/dev/null 2>&1; then
-  service dnsmasq restart
-else
-  echo "No supported DNS cache service found; nothing to flush."
-fi
-`
+	var b strings.Builder
+	b.WriteString("\nset -eu\n")
+	for index, flush := range linuxDNSFlushTools {
+		keyword := "elif"
+		if index == 0 {
+			keyword = "if"
+		}
+		fmt.Fprintf(&b, "%s command -v %s >/dev/null 2>&1; then\n  %s\n", keyword, flush.tool, flush.command)
+	}
+	b.WriteString("else\n  echo \"No supported DNS cache service found; nothing to flush.\"\nfi\n")
+	return b.String()
 }
 
 func windowsEnableDoHScript() string {
-	return `
+	entries := make([]string, 0, len(windowsDoHServers))
+	for _, doh := range windowsDoHServers {
+		entries = append(entries, fmt.Sprintf(`    @{Server="%s"; Template="%s"}`, doh.server, doh.template))
+	}
+	return fmt.Sprintf(`
 $ErrorActionPreference = "Stop"
 $dnsServers = @(
-    @{Server="1.1.1.1"; Template="https://cloudflare-dns.com/dns-query"},
-    @{Server="8.8.8.8"; Template="https://dns.google/dns-query"},
-    @{Server="9.9.9.9"; Template="https://dns.quad9.net/dns-query"}
+%s
 )
 foreach ($dns in $dnsServers) {
     $existing = Get-DnsClientDohServerAddress -ServerAddress $dns.Server -ErrorAction SilentlyContinue
     if ($existing) {
-        Set-DnsClientDohServerAddress -ServerAddress $dns.Server -DohTemplate $dns.Template -AllowFallbackToUdp $true -AutoUpgrade $true
+        %s
     } else {
-        Add-DnsClientDohServerAddress -ServerAddress $dns.Server -DohTemplate $dns.Template -AllowFallbackToUdp $true -AutoUpgrade $true
+        %s
     }
     Write-Output ("Registered DoH template for {0}" -f $dns.Server)
 }
-`
+`, strings.Join(entries, ",\n"), windowsSetDoHCommand, windowsAddDoHCommand)
 }
 
 func windowsDisableDoHScript() string {
-	return `
+	return fmt.Sprintf(`
 $ErrorActionPreference = "Stop"
 $dohServers = Get-DnsClientDohServerAddress -ErrorAction SilentlyContinue
 foreach ($server in $dohServers) {
-    Remove-DnsClientDohServerAddress -ServerAddress $server.ServerAddress
+    %s
     Write-Output ("Removed DoH template for {0}" -f $server.ServerAddress)
 }
-`
+`, windowsRemoveDoHCommand)
 }
 
 func windowsSetMTUScript(mtu int) string {
@@ -1217,10 +1331,10 @@ $ErrorActionPreference = "Stop"
 $adapters = Get-NetAdapter | Where-Object {$_.Status -eq "Up"}
 if (-not $adapters) { throw "No active adapters found." }
 foreach ($adapter in $adapters) {
-    Set-NetIPInterface -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -NlMtu %d
+    %s
     Write-Output ("Set MTU %d on {0}" -f $adapter.Name)
 }
-`, mtu, mtu)
+`, windowsSetMTUCommand(mtu), mtu)
 }
 
 func darwinSetMTUScript(mtu int) string {
@@ -1230,12 +1344,12 @@ MTU=%d
 %s
 while IFS= read -r port; do
   [ -z "$port" ] && continue
-  networksetup -setMTU "$port" "$MTU"
+  %s
   echo "Set MTU $MTU on $port"
 done <<EOF
 $ports
 EOF
-`, mtu, darwinHardwarePortsSnippet)
+`, mtu, darwinHardwarePortsSnippet, darwinSetMTUCommand)
 }
 
 func linuxSetMTUScript(mtu int) string {
@@ -1244,26 +1358,30 @@ set -eu
 MTU=%d
 %s
 for link in $links; do
-  ip link set dev "$link" mtu "$MTU"
+  %s
   echo "Set MTU $MTU on $link"
 done
-`, mtu, linuxActiveLinksSnippet)
+`, mtu, linuxActiveLinksSnippet, linuxSetMTUCommand)
 }
 
 func windowsOptimizeNetworkScript() string {
-	return `
+	settings := make([]string, 0, len(windowsOptimizeTCPSettings))
+	for _, setting := range windowsOptimizeTCPSettings {
+		settings = append(settings, `"`+setting+`"`)
+	}
+	return fmt.Sprintf(`
 $ErrorActionPreference = "Stop"
-$tcpSettings = @("autotuninglevel=normal", "rss=enabled", "timestamps=disabled", "ecncapability=enabled")
+$tcpSettings = @(%s)
 foreach ($setting in $tcpSettings) {
-    netsh int tcp set global $setting
+    %s
     if ($LASTEXITCODE -ne 0) { throw "netsh int tcp set global $setting failed with exit code $LASTEXITCODE" }
 }
 $adapters = Get-NetAdapter | Where-Object {$_.Status -eq "Up"}
 foreach ($adapter in $adapters) {
-    Set-NetIPInterface -InterfaceIndex $adapter.InterfaceIndex -AddressFamily IPv4 -NlMtu 1500
-    Write-Output ("Set MTU 1500 on {0}" -f $adapter.Name)
+    %s
+    Write-Output ("Set MTU %d on {0}" -f $adapter.Name)
 }
-`
+`, strings.Join(settings, ", "), windowsTCPSetGlobalCommand, windowsSetMTUCommand(windowsMTUOptimizeValue), windowsMTUOptimizeValue)
 }
 
 func darwinOptimizeNetworkScript() string {
@@ -1271,27 +1389,29 @@ func darwinOptimizeNetworkScript() string {
 }
 
 func linuxOptimizeNetworkScript() string {
+	return linuxSysctlAndMTUScript(linuxOptimizeSysctlCommands)
+}
+
+func linuxSysctlAndMTUScript(sysctls []string) string {
 	return fmt.Sprintf(`
 set -eu
-sysctl -w net.ipv4.tcp_moderate_rcvbuf=1
-sysctl -w net.ipv4.tcp_timestamps=0
-sysctl -w net.ipv4.tcp_ecn=1
+%s
 %s
 for link in $links; do
-  ip link set dev "$link" mtu 1500
+  %s
   echo "Set MTU 1500 on $link"
 done
-`, linuxActiveLinksSnippet)
+`, strings.Join(sysctls, "\n"), linuxActiveLinksSnippet, linuxSetMTU1500Command)
 }
 
 func windowsResetNetworkOptimizationsScript() string {
-	return `
+	return fmt.Sprintf(`
 $ErrorActionPreference = "Stop"
-netsh int tcp reset
+%s
 if ($LASTEXITCODE -ne 0) { throw "netsh int tcp reset failed with exit code $LASTEXITCODE" }
-netsh winsock reset
+%s
 if ($LASTEXITCODE -ne 0) { throw "netsh winsock reset failed with exit code $LASTEXITCODE" }
-`
+`, windowsTCPResetCommand, windowsWinsockResetCommand)
 }
 
 func darwinResetNetworkOptimizationsScript() string {
@@ -1300,41 +1420,31 @@ set -eu
 %s
 while IFS= read -r port; do
   [ -z "$port" ] && continue
-  networksetup -setMTUAndMediaAutomatically "$port" >/dev/null 2>&1 || networksetup -setMTU "$port" 1500
+  %s >/dev/null 2>&1 || networksetup -setMTU "$port" 1500
   echo "Reset MTU on $port"
 done <<EOF
 $ports
 EOF
-`, darwinHardwarePortsSnippet)
+`, darwinHardwarePortsSnippet, darwinResetMTUCommand)
 }
 
 func linuxResetNetworkOptimizationsScript() string {
-	return fmt.Sprintf(`
-set -eu
-sysctl -w net.ipv4.tcp_moderate_rcvbuf=1
-sysctl -w net.ipv4.tcp_timestamps=1
-sysctl -w net.ipv4.tcp_ecn=2
-%s
-for link in $links; do
-  ip link set dev "$link" mtu 1500
-  echo "Set MTU 1500 on $link"
-done
-`, linuxActiveLinksSnippet)
+	return linuxSysctlAndMTUScript(linuxResetSysctlCommands)
 }
 
 func windowsResetDNSScript() string {
-	return `
+	return fmt.Sprintf(`
 $ErrorActionPreference = "Stop"
 $adapters = Get-NetAdapter | Where-Object {$_.Status -eq "Up"}
 if (-not $adapters) { throw "No active adapters found." }
 foreach ($adapter in $adapters) {
-    Set-DnsClientServerAddress -InterfaceIndex $adapter.InterfaceIndex -ResetServerAddresses
+    %s
     Write-Output ("Reset DNS on {0}" -f $adapter.Name)
 }
-ipconfig /flushdns | Out-Null
+%s | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "ipconfig /flushdns failed with exit code $LASTEXITCODE" }
-Clear-DnsClientCache
-`
+%s
+`, windowsResetDNSServersCommand, windowsFlushDNSCommand, windowsClearDNSCacheCommand)
 }
 
 func darwinResetDNSScript() string {
@@ -1343,14 +1453,14 @@ set -eu
 %s
 while IFS= read -r service; do
   [ -z "$service" ] && continue
-  networksetup -setdnsservers "$service" Empty
+  %s
   echo "Reset DNS on $service"
 done <<EOF
 $services
 EOF
-dscacheutil -flushcache
-killall -HUP mDNSResponder
-`, darwinNetworkServicesSnippet)
+%s
+%s
+`, darwinNetworkServicesSnippet, darwinResetDNSServersCommand, darwinFlushCacheCommand, darwinRestartResponderCommand)
 }
 
 func linuxResetDNSScript() string {
@@ -1363,8 +1473,8 @@ if command -v nmcli >/dev/null 2>&1; then
     if [ "$type" = loopback ]; then
       continue
     fi
-    nmcli connection modify "$uuid" ipv4.ignore-auto-dns no ipv4.dns ""
-    nmcli connection up "$uuid" >/dev/null
+    %s
+    %s >/dev/null
     echo "Reset DNS on NetworkManager connection $uuid ($type)"
     changed=$((changed + 1))
   done <<EOF
@@ -1377,18 +1487,18 @@ EOF
 elif command -v resolvectl >/dev/null 2>&1; then
   %s
   for link in $links; do
-    resolvectl revert "$link"
+    %s
     echo "Reverted DNS on $link through systemd-resolved"
   done
 elif [ -f /etc/resolv.conf.utils.bak ]; then
-  cp /etc/resolv.conf.utils.bak /etc/resolv.conf
-  rm -f /etc/resolv.conf.utils.bak
+  %s
+  %s
   echo "Restored /etc/resolv.conf from /etc/resolv.conf.utils.bak"
 else
   echo "No supported DNS reset mechanism found." >&2
   exit 1
 fi
-`, linuxActiveConnectionsSnippet, linuxActiveLinksSnippet)
+`, linuxActiveConnectionsSnippet, linuxNMResetDNSCommand, linuxNMUpCommand, linuxActiveLinksSnippet, linuxResolvedRevertCommand, linuxResolvConfRestoreCommand, linuxResolvConfDropBackupCommand)
 }
 
 func windowsViewHostsScript() string {
@@ -1421,9 +1531,9 @@ func windowsBackupHostsScript(stamp string) string {
 $ErrorActionPreference = "Stop"
 %s
 $backupPath = $hostsPath + ".backup-" + %s
-Copy-Item -LiteralPath $hostsPath -Destination $backupPath
+%s
 Write-Output ("Backed up {0} to {1}" -f $hostsPath, $backupPath)
-`, windowsHostsPathLine, powerShellQuote(stamp))
+`, windowsHostsPathLine, powerShellQuote(stamp), windowsBackupHostsCommand)
 }
 
 func posixBackupHostsScript(hostsPath, stamp string) string {
@@ -1431,9 +1541,9 @@ func posixBackupHostsScript(hostsPath, stamp string) string {
 set -eu
 hosts=%s
 backup="$hosts.backup-"%s
-cp -p "$hosts" "$backup"
+%s
 echo "Backed up $hosts to $backup"
-`, shellQuote(hostsPath), shellQuote(stamp))
+`, shellQuote(hostsPath), shellQuote(stamp), posixBackupHostsCommand)
 }
 
 func windowsRestoreHostsScript(stamp string) string {
@@ -1443,11 +1553,11 @@ $ErrorActionPreference = "Stop"
 $latest = Get-ChildItem -LiteralPath (Split-Path $hostsPath) -Filter "hosts.backup-*" -File | Sort-Object Name | Select-Object -Last 1
 if (-not $latest) { throw ("No hosts backup matching {0}.backup-* was found." -f $hostsPath) }
 $savedPath = $hostsPath + ".before-restore-" + %s
-Copy-Item -LiteralPath $hostsPath -Destination $savedPath
-Copy-Item -LiteralPath $latest.FullName -Destination $hostsPath -Force
+%s
+%s
 Write-Output ("Saved the current {0} as {1}" -f $hostsPath, $savedPath)
 Write-Output ("Restored {0} from {1}" -f $hostsPath, $latest.FullName)
-`, windowsHostsPathLine, powerShellQuote(stamp))
+`, windowsHostsPathLine, powerShellQuote(stamp), windowsSaveHostsCommand, windowsRestoreHostsCommand)
 }
 
 func posixRestoreHostsScript(hostsPath, stamp string) string {
@@ -1465,24 +1575,24 @@ if [ -z "$latest" ]; then
   exit 1
 fi
 saved="$hosts.before-restore-"%s
-cp -p "$hosts" "$saved"
-cat "$latest" > "$hosts"
+%s
+%s
 echo "Saved the current $hosts as $saved"
 echo "Restored $hosts from $latest"
-`, shellQuote(hostsPath), shellQuote(stamp))
+`, shellQuote(hostsPath), shellQuote(stamp), posixSaveHostsCommand, posixRestoreHostsCommand)
 }
 
 func windowsAddHostsEntryScript(ip, domain string) string {
 	return fmt.Sprintf(`
 $ErrorActionPreference = "Stop"
 %s
-$entry = %s + [char]9 + %s + [char]9 + %s
+%s
 $lineBreak = [string][char]13 + [char]10
 $current = [System.IO.File]::ReadAllText($hostsPath)
 $prefix = if ($current.Length -gt 0 -and -not $current.EndsWith([string][char]10)) { $lineBreak } else { "" }
-[System.IO.File]::AppendAllText($hostsPath, $prefix + $entry + $lineBreak, [System.Text.Encoding]::ASCII)
+%s
 Write-Output ("Added to {0}: {1}" -f $hostsPath, $entry)
-`, windowsHostsPathLine, powerShellQuote(ip), powerShellQuote(domain), powerShellQuote(HostsManagedMarker))
+`, windowsHostsPathLine, windowsHostsEntryLine(ip, domain), windowsAppendHostsCommand)
 }
 
 func posixAddHostsEntryScript(hostsPath, ip, domain string) string {
@@ -1492,9 +1602,9 @@ hosts=%s
 if [ -s "$hosts" ] && [ -n "$(tail -c 1 "$hosts")" ]; then
   printf '\n' >> "$hosts"
 fi
-printf '%%s\t%%s\t%%s\n' %s %s %s >> "$hosts"
+%s
 echo "Added to $hosts:" %s %s
-`, shellQuote(hostsPath), shellQuote(ip), shellQuote(domain), shellQuote(HostsManagedMarker), shellQuote(ip), shellQuote(domain))
+`, shellQuote(hostsPath), posixAppendHostsCommand(ip, domain), shellQuote(ip), shellQuote(domain))
 }
 
 func windowsRemoveManagedHostsScript() string {
@@ -1514,9 +1624,9 @@ foreach ($line in [System.IO.File]::ReadAllLines($hostsPath)) {
         Write-Output ("Left unmanaged: {0}" -f $line)
     }
 }
-[System.IO.File]::WriteAllLines($hostsPath, $kept, (New-Object System.Text.UTF8Encoding $false))
+%s
 Write-Output ("Removed {0} utils-managed entries." -f $removed)
-`, windowsHostsPathLine, hostsManagedTag)
+`, windowsHostsPathLine, hostsManagedTag, windowsRewriteHostsCommand)
 }
 
 func posixRemoveManagedHostsScript(hostsPath string) string {
@@ -1532,8 +1642,8 @@ awk -v kept="$kept" '
 { print "Left unmanaged: " $0 }
 END { printf "Removed %%d utils-managed entries.\n", removed }
 ' "$hosts"
-cat "$kept" > "$hosts"
-`, shellQuote(hostsPath), hostsManagedTag)
+%s
+`, shellQuote(hostsPath), hostsManagedTag, posixRewriteHostsCommand)
 }
 
 func windowsPersistentStatusScript() string {
@@ -1577,11 +1687,8 @@ $regPath = "HKCU:\Software\NetworkConfigTool"
 if (-not (Test-Path $regPath)) {
     New-Item -Path $regPath -Force | Out-Null
 }
-Set-ItemProperty -Path $regPath -Name "DNSPrimary" -Value %s
-Set-ItemProperty -Path $regPath -Name "DNSSecondary" -Value %s
-Set-ItemProperty -Path $regPath -Name "DNSName" -Value %s
-Set-ItemProperty -Path $regPath -Name "PersistentMode" -Value $true
-`, powerShellQuote(opts.DNSPrimary), powerShellQuote(opts.DNSSecondary), powerShellQuote(opts.DNSName))
+%s
+`, strings.Join(windowsPersistentValueCommands(opts), "\n"))
 }
 
 func darwinSavePersistentSettingsScript(opts ConfigOptions) string {
@@ -1593,6 +1700,15 @@ func linuxSavePersistentSettingsScript(opts ConfigOptions) string {
 }
 
 func posixSavePersistentSettingsScript(opts ConfigOptions) string {
+	return fmt.Sprintf(`
+set -eu
+dir="${HOME}/.config/utils"
+%s
+%s
+`, posixMakePersistentDirCommand, posixWritePersistentCommand(opts))
+}
+
+func posixWritePersistentCommand(opts ConfigOptions) string {
 	lines := []string{
 		"PersistentMode=True",
 		"DNSPrimary=" + opts.DNSPrimary,
@@ -1603,21 +1719,16 @@ func posixSavePersistentSettingsScript(opts ConfigOptions) string {
 	for _, line := range lines {
 		quoted = append(quoted, shellQuote(line))
 	}
-	return fmt.Sprintf(`
-set -eu
-dir="${HOME}/.config/utils"
-mkdir -p "$dir"
-printf '%%s\n' %s > "$dir/network-persistent.conf"
-`, strings.Join(quoted, " "))
+	return fmt.Sprintf(`printf '%%s\n' %s > "$dir/network-persistent.conf"`, strings.Join(quoted, " "))
 }
 
 func windowsClearPersistentSettingsScript() string {
-	return `
+	return fmt.Sprintf(`
 $regPath = "HKCU:\Software\NetworkConfigTool"
 if (Test-Path $regPath) {
-    Remove-Item -Path $regPath -Recurse -Force
+    %s
 }
-`
+`, windowsClearPersistentCommand)
 }
 
 func darwinClearPersistentSettingsScript() string {
@@ -1629,9 +1740,7 @@ func linuxClearPersistentSettingsScript() string {
 }
 
 func posixClearPersistentSettingsScript() string {
-	return `
-rm -f "${HOME}/.config/utils/network-persistent.conf"
-`
+	return "\n" + posixClearPersistentCommand + "\n"
 }
 
 func windowsBrowserCacheScript(mode BrowserMode) string {
@@ -1640,28 +1749,32 @@ func windowsBrowserCacheScript(mode BrowserMode) string {
 function Clear-CachePath {
     param([string]$Path)
     if (Test-Path $Path) {
-        Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        %s
         Write-Output ("Cleared: {0}" -f $Path)
     } else {
         Write-Output ("Not found: {0}" -f $Path)
     }
 }
 %s
-`, sections)
+`, windowsClearCachePathCommand, sections)
 }
 
 func windowsBrowserCacheSections(mode BrowserMode) string {
 	var b strings.Builder
-	addChrome := func() {
-		b.WriteString(`
-Clear-CachePath "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache"
-Clear-CachePath "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Code Cache"
-Clear-CachePath "$env:LOCALAPPDATA\Chromium\User Data\Default\Cache"
-Clear-CachePath "$env:LOCALAPPDATA\Chromium\User Data\Default\Code Cache"
-`)
+	for _, target := range browserCacheTargets(mode, windowsBrowserCaches) {
+		if target.browser == BrowserFirefox {
+			b.WriteString(windowsFirefoxCacheSection)
+			continue
+		}
+		b.WriteString("\n")
+		for _, path := range target.paths {
+			fmt.Fprintf(&b, "Clear-CachePath \"%s\"\n", path)
+		}
 	}
-	addFirefox := func() {
-		b.WriteString(`
+	return b.String()
+}
+
+const windowsFirefoxCacheSection = `
 $firefoxRoot = "$env:LOCALAPPDATA\Mozilla\Firefox\Profiles"
 if (Test-Path $firefoxRoot) {
     Get-ChildItem $firefoxRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match ".*\.default.*" } | ForEach-Object {
@@ -1670,46 +1783,89 @@ if (Test-Path $firefoxRoot) {
 } else {
     Write-Output ("Not found: {0}" -f $firefoxRoot)
 }
-`)
-	}
-	addEdge := func() {
-		b.WriteString(`
-Clear-CachePath "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache"
-Clear-CachePath "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Code Cache"
-`)
-	}
-	addBrave := func() {
-		b.WriteString(`
-Clear-CachePath "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cache"
-Clear-CachePath "$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Code Cache"
-`)
-	}
-	addOpera := func() {
-		b.WriteString(`
-Clear-CachePath "$env:LOCALAPPDATA\Opera Software\Opera Stable\Cache"
-Clear-CachePath "$env:LOCALAPPDATA\Opera Software\Opera Stable\Code Cache"
-`)
-	}
+`
 
-	switch mode {
-	case BrowserChrome:
-		addChrome()
-	case BrowserFirefox:
-		addFirefox()
-	case BrowserEdge:
-		addEdge()
-	case BrowserBrave:
-		addBrave()
-	case BrowserOpera:
-		addOpera()
-	default:
-		addChrome()
-		addFirefox()
-		addEdge()
-		addBrave()
-		addOpera()
+type browserCacheTarget struct {
+	browser BrowserMode
+	paths   []string
+}
+
+var windowsBrowserCaches = []browserCacheTarget{
+	{BrowserChrome, []string{
+		`$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache`,
+		`$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Code Cache`,
+		`$env:LOCALAPPDATA\Chromium\User Data\Default\Cache`,
+		`$env:LOCALAPPDATA\Chromium\User Data\Default\Code Cache`,
+	}},
+	{BrowserFirefox, []string{`$env:LOCALAPPDATA\Mozilla\Firefox\Profiles\*.default*\cache2`}},
+	{BrowserEdge, []string{
+		`$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache`,
+		`$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Code Cache`,
+	}},
+	{BrowserBrave, []string{
+		`$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cache`,
+		`$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Code Cache`,
+	}},
+	{BrowserOpera, []string{
+		`$env:LOCALAPPDATA\Opera Software\Opera Stable\Cache`,
+		`$env:LOCALAPPDATA\Opera Software\Opera Stable\Code Cache`,
+	}},
+}
+
+var darwinBrowserCaches = []browserCacheTarget{
+	{BrowserChrome, []string{
+		"$HOME/Library/Caches/Google/Chrome/Default",
+		"$HOME/Library/Application Support/Google/Chrome/Default/Code Cache",
+		"$HOME/Library/Caches/Chromium/Default",
+		"$HOME/Library/Application Support/Chromium/Default/Code Cache",
+	}},
+	{BrowserFirefox, []string{`"$HOME"/Library/Caches/Firefox/Profiles/*/cache2`, `"$HOME"/Library/Caches/Mozilla/Firefox/Profiles/*/cache2`}},
+	{BrowserEdge, []string{
+		"$HOME/Library/Caches/Microsoft Edge/Default",
+		"$HOME/Library/Application Support/Microsoft Edge/Default/Code Cache",
+	}},
+	{BrowserBrave, []string{
+		"$HOME/Library/Caches/BraveSoftware/Brave-Browser/Default",
+		"$HOME/Library/Application Support/BraveSoftware/Brave-Browser/Default/Code Cache",
+	}},
+	{BrowserOpera, []string{
+		"$HOME/Library/Caches/com.operasoftware.Opera",
+		"$HOME/Library/Application Support/com.operasoftware.Opera/Code Cache",
+	}},
+}
+
+var linuxBrowserCaches = []browserCacheTarget{
+	{BrowserChrome, []string{
+		"$HOME/.cache/google-chrome/Default/Cache",
+		"$HOME/.cache/google-chrome/Default/Code Cache",
+		"$HOME/.cache/chromium/Default/Cache",
+		"$HOME/.cache/chromium/Default/Code Cache",
+	}},
+	{BrowserFirefox, []string{`"$HOME"/.cache/mozilla/firefox/*.default*/cache2`}},
+	{BrowserEdge, []string{
+		"$HOME/.cache/microsoft-edge/Default/Cache",
+		"$HOME/.cache/microsoft-edge/Default/Code Cache",
+	}},
+	{BrowserBrave, []string{
+		"$HOME/.cache/BraveSoftware/Brave-Browser/Default/Cache",
+		"$HOME/.cache/BraveSoftware/Brave-Browser/Default/Code Cache",
+	}},
+	{BrowserOpera, []string{
+		"$HOME/.cache/opera",
+		"$HOME/.config/opera/Code Cache",
+	}},
+}
+
+func browserCacheTargets(mode BrowserMode, targets []browserCacheTarget) []browserCacheTarget {
+	if mode < BrowserChrome || mode >= BrowserAll {
+		return targets
 	}
-	return b.String()
+	for _, target := range targets {
+		if target.browser == mode {
+			return []browserCacheTarget{target}
+		}
+	}
+	return nil
 }
 
 func darwinBrowserCacheScript(mode BrowserMode) string {
@@ -1726,112 +1882,36 @@ func posixBrowserCacheScript(mode BrowserMode, darwin bool) string {
 clear_path() {
   path="$1"
   if [ -d "$path" ]; then
-    rm -rf "$path"/* 2>/dev/null || true
+    %s 2>/dev/null || true
     echo "Cleared: $path"
   else
     echo "Not found: $path"
   fi
 }
 %s
-`, sections)
+`, posixClearCachePathCommand, sections)
 }
 
 func posixBrowserCacheSections(mode BrowserMode, darwin bool) string {
 	var b strings.Builder
-	add := func(script string) {
-		b.WriteString(script)
-	}
-	addChrome := func() {
-		if darwin {
-			add(`
-clear_path "$HOME/Library/Caches/Google/Chrome/Default"
-clear_path "$HOME/Library/Application Support/Google/Chrome/Default/Code Cache"
-clear_path "$HOME/Library/Caches/Chromium/Default"
-clear_path "$HOME/Library/Application Support/Chromium/Default/Code Cache"
-`)
-			return
+	for _, target := range browserCacheTargets(mode, posixBrowserCaches(darwin)) {
+		if target.browser == BrowserFirefox {
+			fmt.Fprintf(&b, "\nfor path in %s; do\n  [ -d \"$path\" ] && clear_path \"$path\"\ndone\n", strings.Join(target.paths, " "))
+			continue
 		}
-		add(`
-clear_path "$HOME/.cache/google-chrome/Default/Cache"
-clear_path "$HOME/.cache/google-chrome/Default/Code Cache"
-clear_path "$HOME/.cache/chromium/Default/Cache"
-clear_path "$HOME/.cache/chromium/Default/Code Cache"
-`)
-	}
-	addFirefox := func() {
-		if darwin {
-			add(`
-for path in "$HOME"/Library/Caches/Firefox/Profiles/*/cache2 "$HOME"/Library/Caches/Mozilla/Firefox/Profiles/*/cache2; do
-  [ -d "$path" ] && clear_path "$path"
-done
-`)
-			return
+		b.WriteString("\n")
+		for _, path := range target.paths {
+			fmt.Fprintf(&b, "clear_path \"%s\"\n", path)
 		}
-		add(`
-for path in "$HOME"/.cache/mozilla/firefox/*.default*/cache2; do
-  [ -d "$path" ] && clear_path "$path"
-done
-`)
-	}
-	addEdge := func() {
-		if darwin {
-			add(`
-clear_path "$HOME/Library/Caches/Microsoft Edge/Default"
-clear_path "$HOME/Library/Application Support/Microsoft Edge/Default/Code Cache"
-`)
-			return
-		}
-		add(`
-clear_path "$HOME/.cache/microsoft-edge/Default/Cache"
-clear_path "$HOME/.cache/microsoft-edge/Default/Code Cache"
-`)
-	}
-	addBrave := func() {
-		if darwin {
-			add(`
-clear_path "$HOME/Library/Caches/BraveSoftware/Brave-Browser/Default"
-clear_path "$HOME/Library/Application Support/BraveSoftware/Brave-Browser/Default/Code Cache"
-`)
-			return
-		}
-		add(`
-clear_path "$HOME/.cache/BraveSoftware/Brave-Browser/Default/Cache"
-clear_path "$HOME/.cache/BraveSoftware/Brave-Browser/Default/Code Cache"
-`)
-	}
-	addOpera := func() {
-		if darwin {
-			add(`
-clear_path "$HOME/Library/Caches/com.operasoftware.Opera"
-clear_path "$HOME/Library/Application Support/com.operasoftware.Opera/Code Cache"
-`)
-			return
-		}
-		add(`
-clear_path "$HOME/.cache/opera"
-clear_path "$HOME/.config/opera/Code Cache"
-`)
-	}
-
-	switch mode {
-	case BrowserChrome:
-		addChrome()
-	case BrowserFirefox:
-		addFirefox()
-	case BrowserEdge:
-		addEdge()
-	case BrowserBrave:
-		addBrave()
-	case BrowserOpera:
-		addOpera()
-	default:
-		addChrome()
-		addFirefox()
-		addEdge()
-		addBrave()
-		addOpera()
 	}
 	return b.String()
+}
+
+func posixBrowserCaches(darwin bool) []browserCacheTarget {
+	if darwin {
+		return darwinBrowserCaches
+	}
+	return linuxBrowserCaches
 }
 
 const (

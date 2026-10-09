@@ -111,12 +111,12 @@ func TestRouterTypesQIntoHostsField(t *testing.T) {
 	d := newDriver(t)
 
 	d.send(key("2"))
-	d.selectNetworkAction("Prompts for domain and IP")
+	d.selectNetworkAction("Appends one line tagged")
 	d.send(tea.KeyMsg{Type: tea.KeyEnter})
 	d.send(key("q"))
 	d.pumpFor(20 * time.Millisecond)
 
-	if view := d.view(); d.quit || !strings.Contains(view, "Add a hosts entry") || !strings.Contains(view, "example.localq") {
+	if view := d.view(); d.quit || !strings.Contains(view, "Add hosts entry") || !strings.Contains(view, "example.localq") {
 		t.Fatalf("expected q to be typed into the domain field:\n%s", view)
 	}
 }
@@ -284,14 +284,15 @@ func TestRouterEscAtNetworkWriteConfirmationReturnsToActions(t *testing.T) {
 	d := newDriver(t)
 
 	d.send(key("2"))
-	d.selectNetworkAction("Flushes OS DNS caches")
+	d.selectNetworkAction("Flushes the operating system DNS cache")
 	for _, cancel := range []tea.KeyMsg{{Type: tea.KeyEsc}, key("n")} {
 		d.send(tea.KeyMsg{Type: tea.KeyEnter})
-		if view := d.view(); !strings.Contains(view, "These actions change your system") {
+		if view := d.view(); !strings.Contains(view, "Change system settings") {
 			t.Fatalf("expected the write confirmation:\n%s", view)
 		}
 		d.send(cancel)
-		if view := d.view(); !strings.Contains(view, "Canceled; nothing was changed.") || strings.Contains(view, "These actions change your system") {
+		d.pumpUntil(func() bool { return strings.Contains(d.view(), "Canceled · nothing was changed") })
+		if view := d.view(); strings.Contains(view, "Change system settings") {
 			t.Fatalf("expected %q at the write confirmation to return to the actions with nothing changed:\n%s", cancel, view)
 		}
 	}
