@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf16"
 )
@@ -30,7 +29,6 @@ type Entry struct {
 }
 
 type Report struct {
-	mu        sync.Mutex
 	Operation string
 	Entries   []Entry
 	Warnings  int
@@ -698,9 +696,6 @@ func parsePersistentSettings(output string) PersistentSettings {
 }
 
 func (r *Report) add(level Level, format string, args ...any) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	switch level {
 	case LevelWarn:
 		r.Warnings++

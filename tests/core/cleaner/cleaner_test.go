@@ -3,11 +3,13 @@ package cleaner_test
 import (
 	"context"
 	"errors"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"utils/internal/core/cleaner"
 )
@@ -165,6 +167,27 @@ func TestRunForceStopsTargetProcessesWhenOptedIn(t *testing.T) {
 	assertCommandCalled(t, commands.killCommands, "pkill", "-x", "claude")
 }
 
+func TestRunLogsTargetsInStableOrder(t *testing.T) {
+	fakeHome(t)
+	run := func() []string {
+		report, err := cleaner.NewCleaner(jitterFileSystem{}, newFakeProcessCommandRunner()).Run(context.Background(), cleaner.Options{})
+		if err != nil {
+			t.Fatalf("Run returned error: %v", err)
+		}
+		messages := make([]string, 0, len(report.Entries))
+		for _, entry := range report.Entries {
+			messages = append(messages, entry.Message)
+		}
+		return messages
+	}
+
+	first := strings.Join(run(), "\n")
+	second := strings.Join(run(), "\n")
+	if first != second {
+		t.Fatalf("expected identical log order across runs, got:\n%s\n---\n%s", first, second)
+	}
+}
+
 func fakeHome(t *testing.T) string {
 	t.Helper()
 
@@ -178,6 +201,35 @@ func fakeHome(t *testing.T) string {
 
 	return home
 }
+
+type jitterFileSystem struct{}
+
+func (jitterFileSystem) UserHomeDir() (string, error) { return os.UserHomeDir() }
+
+func (jitterFileSystem) Getenv(key string) string { return os.Getenv(key) }
+
+func (jitterFileSystem) MkdirAll(path string, perm os.FileMode) error {
+	return os.MkdirAll(path, perm)
+}
+
+func (jitterFileSystem) Lstat(name string) (os.FileInfo, error) {
+	time.Sleep(rand.N(2 * time.Millisecond))
+	return os.Lstat(name)
+}
+
+func (jitterFileSystem) ReadDir(name string) ([]os.DirEntry, error) { return os.ReadDir(name) }
+
+func (jitterFileSystem) RemoveAll(path string) error { return os.RemoveAll(path) }
+
+func (jitterFileSystem) WriteFile(name string, data []byte, perm os.FileMode) error {
+	return os.WriteFile(name, data, perm)
+}
+
+func (jitterFileSystem) EvalSymlinks(path string) (string, error) {
+	return filepath.EvalSymlinks(path)
+}
+
+func (jitterFileSystem) Glob(pattern string) ([]string, error) { return filepath.Glob(pattern) }
 
 type fakeProcessCommandRunner struct {
 	killCommands [][]string

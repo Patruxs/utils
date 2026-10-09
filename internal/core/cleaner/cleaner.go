@@ -13,8 +13,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/errgroup"
 )
 
 type Level string
@@ -44,7 +42,6 @@ type Entry struct {
 }
 
 type Report struct {
-	mu       sync.Mutex
 	Entries  []Entry
 	LogPath  string
 	Deleted  int
@@ -170,7 +167,7 @@ func (c Cleaner) Run(ctx context.Context, opts Options) (Report, error) {
 	report.add(LevelInfo, "Reminder: revoke remote sessions, PATs, SSH keys, API keys, and SSO sessions from their admin portals.")
 
 	if report.LogPath != "" {
-		if err := c.writeLog(report.LogPath, report.entriesSnapshot()); err != nil {
+		if err := c.writeLog(report.LogPath, report.Entries); err != nil {
 			runErrors = append(runErrors, fmt.Errorf("write cleanup log: %w", err))
 		}
 	}
@@ -237,9 +234,6 @@ func (execCommandRunner) Run(ctx context.Context, name string, args ...string) e
 }
 
 func (r *Report) add(level Level, format string, args ...any) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	switch level {
 	case LevelDelete:
 		r.Deleted++
@@ -260,13 +254,13 @@ func (r *Report) add(level Level, format string, args ...any) {
 	})
 }
 
-func (r *Report) entriesSnapshot() []Entry {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	entries := make([]Entry, len(r.Entries))
-	copy(entries, r.Entries)
-	return entries
+func (r *Report) merge(other Report) {
+	r.Entries = append(r.Entries, other.Entries...)
+	r.Deleted += other.Deleted
+	r.DryRuns += other.DryRuns
+	r.Skipped += other.Skipped
+	r.Warnings += other.Warnings
+	r.Errors += other.Errors
 }
 
 func (c Cleaner) resolveLogPath(path string, home string) (string, error) {
@@ -344,25 +338,19 @@ func (c Cleaner) cleanPath(ctx context.Context, report *Report, home string, pat
 }
 
 func (c Cleaner) cleanTargets(ctx context.Context, report *Report, home string, targets []targetPath, execute bool) error {
-	group, groupCtx := errgroup.WithContext(ctx)
+	results := make([]Report, len(targets))
+	runErrors := make([]error, len(targets))
 
-	var mu sync.Mutex
-	var runErrors []error
-
-	for _, target := range targets {
-		target := target
-		group.Go(func() error {
-			if err := c.cleanPath(groupCtx, report, home, target.path, target.label, execute); err != nil {
-				mu.Lock()
-				runErrors = append(runErrors, err)
-				mu.Unlock()
-			}
-			return nil
+	var wg sync.WaitGroup
+	for i, target := range targets {
+		wg.Go(func() {
+			runErrors[i] = c.cleanPath(ctx, &results[i], home, target.path, target.label, execute)
 		})
 	}
+	wg.Wait()
 
-	if err := group.Wait(); err != nil {
-		runErrors = append(runErrors, err)
+	for _, result := range results {
+		report.merge(result)
 	}
 
 	return errors.Join(runErrors...)
