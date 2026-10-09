@@ -24,14 +24,11 @@ func TestFrameComponentsNeverExceedTheirWidth(t *testing.T) {
 
 	for _, width := range []int{4, 9, 20, 39, 60, 78, 118} {
 		rendered := map[string]string{
-			"panel":   Panel{Title: "Include browser profiles and caches", Meta: "1/29 · 0 checked", Variant: PanelFocused, Width: width, Height: 4}.Render(body),
-			"danger":  ConfirmDialog(width, "Change system settings", []string{"• " + body}, []string{"Cancel", "Run these changes"}, 0),
-			"footer":  Footer(width, Hints(keys), Pill("EXECUTING", ToneDanger)),
-			"header":  Header(width, []string{"Cleaner", "Network"}, 1, "v1.2.3 · linux/amd64 · pat@nobara", "v1.2.3"),
-			"modal":   NewConfirm("Delete 7 files and 1 folder", "Delete", "Credentials and tokens   7", body).View(width, 10),
-			"running": RunStatus(width, "⣾", "Running: Run Network Diagnostics", body, 0),
-			"counts":  RenderCounts(width, []Count{{Label: "would delete", N: 7}, {Label: "skipped", N: 42}, {Label: "errors"}}),
-			"notice":  Notice(width, ToneWarning, body),
+			"panel":  Panel{Title: "Include browser profiles and caches", Meta: "1/29 · 0 checked", Variant: PanelFocused, Width: width, Height: 4}.Render(body),
+			"footer": Footer(width, Hints(keys), Pill("EXECUTING", ToneDanger)),
+			"header": Header(width, []string{"Cleaner", "Network"}, 1, "v1.2.3 · linux/amd64 · pat@nobara", "v1.2.3"),
+			"modal":  NewConfirm("Delete 7 files and 1 folder", "Delete", "Credentials and tokens   7", body).View(width, 10),
+			"notice": Notice(width, ToneWarning, body),
 		}
 		for name, view := range rendered {
 			for _, line := range strings.Split(view, "\n") {

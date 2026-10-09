@@ -23,27 +23,16 @@ type LogLine struct {
 }
 
 type LogSection struct {
-	ID            string
-	Title         string
-	Glyph         string
-	Tone          Tone
-	Lines         []LogLine
-	Folded        []LogLine
-	FoldedSummary string
-	Expanded      bool
-}
-
-type logSectionRows struct {
-	header    int
-	foldStart int
-	foldLen   int
+	ID    string
+	Title string
+	Glyph string
+	Tone  Tone
+	Lines []LogLine
 }
 
 type LogViewer struct {
-	viewport     viewport.Model
-	sections     []LogSection
-	sectionRows  []logSectionRows
-	mouseFocused bool
+	viewport viewport.Model
+	sections []LogSection
 }
 
 func NewLogViewer() LogViewer {
@@ -77,32 +66,6 @@ func (m *LogViewer) SetSize(width, height int) {
 	m.viewport.SetYOffset(m.viewport.YOffset)
 }
 
-func (m *LogViewer) ToggleFolded(id string) {
-	for i := range m.sections {
-		if m.sections[i].ID != id || len(m.sections[i].Folded) == 0 {
-			continue
-		}
-		before := m.sectionRows[i]
-		offset := m.viewport.YOffset
-		m.sections[i].Expanded = !m.sections[i].Expanded
-		m.refresh()
-		after := m.sectionRows[i]
-
-		switch {
-		case offset >= before.foldStart+before.foldLen:
-			offset += after.foldLen - before.foldLen
-		case offset > before.foldStart && after.foldLen < before.foldLen:
-			offset = after.header
-		}
-		m.viewport.SetYOffset(offset)
-		return
-	}
-}
-
-func (m *LogViewer) SetMouseFocused(focused bool) {
-	m.mouseFocused = focused
-}
-
 func (m LogViewer) Update(msg tea.Msg) (LogViewer, tea.Cmd) {
 	if !m.HasContent() {
 		return m, nil
@@ -120,26 +83,11 @@ func (m LogViewer) IsKeyScrollInput(msg tea.KeyMsg) bool {
 	return key.Matches(msg, keys.Up, keys.Down, keys.PageUp, keys.PageDown)
 }
 
-func (m LogViewer) IsFocusedMouseScrollInput(msg tea.MouseMsg) bool {
-	if !m.HasContent() || !m.mouseFocused || !m.viewport.MouseWheelEnabled || msg.Action != tea.MouseActionPress {
-		return false
-	}
-	return msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown
-}
-
 func (m LogViewer) View() string {
 	if !m.HasContent() {
 		return ""
 	}
 	return m.viewport.View()
-}
-
-func (m LogViewer) Height() int {
-	return m.viewport.Height
-}
-
-func (m LogViewer) TotalLines() int {
-	return m.viewport.TotalLineCount()
 }
 
 func (m LogViewer) Position() string {
@@ -154,7 +102,7 @@ func (m LogViewer) Position() string {
 
 func (m LogViewer) HasContent() bool {
 	for _, section := range m.sections {
-		if len(section.Lines) > 0 || len(section.Folded) > 0 {
+		if len(section.Lines) > 0 {
 			return true
 		}
 	}
@@ -164,31 +112,17 @@ func (m LogViewer) HasContent() bool {
 func (m *LogViewer) refresh() {
 	width := m.viewport.Width
 	var rows []string
-	m.sectionRows = make([]logSectionRows, len(m.sections))
-	for i, section := range m.sections {
-		if len(section.Lines) == 0 && len(section.Folded) == 0 {
-			m.sectionRows[i] = logSectionRows{header: len(rows), foldStart: len(rows)}
+	for _, section := range m.sections {
+		if len(section.Lines) == 0 {
 			continue
 		}
 		textColumn := logTextColumn(section, width)
-		layout := logSectionRows{header: len(rows)}
 		if section.Title != "" {
 			rows = append(rows, renderLogHeader(section, width))
 		}
 		for _, line := range section.Lines {
 			rows = append(rows, renderLogLine(line, width, textColumn)...)
 		}
-		layout.foldStart = len(rows)
-		switch {
-		case section.Expanded:
-			for _, line := range section.Folded {
-				rows = append(rows, renderLogLine(line, width, textColumn)...)
-			}
-		case section.Title == "" && len(section.Folded) > 0 && section.FoldedSummary != "":
-			rows = append(rows, Muted.Render(Truncate(logLineIndent+section.FoldedSummary, width)))
-		}
-		layout.foldLen = len(rows) - layout.foldStart
-		m.sectionRows[i] = layout
 	}
 	m.viewport.SetContent(strings.Join(rows, "\n"))
 }
@@ -203,10 +137,7 @@ func renderLogHeader(section LogSection, width int) string {
 		header = section.Tone.Style().Render(glyph) + " "
 	}
 	header += section.Tone.Style().Bold(true).Render(section.Title)
-	header += "  " + fmt.Sprint(len(section.Lines)+len(section.Folded))
-	if len(section.Folded) > 0 && !section.Expanded && section.FoldedSummary != "" {
-		header += Muted.Render(" — " + section.FoldedSummary)
-	}
+	header += "  " + fmt.Sprint(len(section.Lines))
 	return Truncate(header, width)
 }
 
@@ -219,11 +150,9 @@ func logLinePrefix(line LogLine) string {
 
 func logTextColumn(section LogSection, width int) int {
 	column := 0
-	for _, lines := range [][]LogLine{section.Lines, section.Folded} {
-		for _, line := range lines {
-			if line.Detail != "" {
-				column = MaxInt(column, lipgloss.Width(logLinePrefix(line)+line.Text))
-			}
+	for _, line := range section.Lines {
+		if line.Detail != "" {
+			column = MaxInt(column, lipgloss.Width(logLinePrefix(line)+line.Text))
 		}
 	}
 	return MinInt(column, width*logTextColumnShare/100)

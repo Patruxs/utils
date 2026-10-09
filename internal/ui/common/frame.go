@@ -140,10 +140,10 @@ func NoticeLine(width int, tone Tone, text string) string {
 	if glyph := tone.Glyph(); glyph != "" {
 		prefix = glyph + " "
 	}
-	return tone.Style().Render(ElideMiddle(prefix+singleLine(text), width))
+	return tone.Style().Render(elideMiddle(prefix+singleLine(text), width))
 }
 
-func ElideMiddle(text string, width int) string {
+func elideMiddle(text string, width int) string {
 	if lipgloss.Width(text) <= width {
 		return text
 	}
