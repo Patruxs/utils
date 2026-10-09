@@ -32,12 +32,11 @@ func (i CheckboxItem) FilterValue() string {
 const checkboxLabelMinWidth = 12
 
 type CheckboxListModel struct {
-	list        list.Model
-	focused     bool
-	hideDetails bool
-	width       int
-	height      int
-	offset      int
+	list    list.Model
+	focused bool
+	width   int
+	height  int
+	offset  int
 }
 
 type checkboxRow struct {
@@ -92,10 +91,6 @@ func (m CheckboxListModel) View() string {
 		width = DefaultContentWidth
 	}
 
-	if !m.hideDetails {
-		return m.viewWithInlineDetails(width)
-	}
-
 	rows := m.rows()
 	start, end, showAbove, showBelow := m.window(rows)
 	lines := make([]string, 0, MaxInt(0, m.height))
@@ -107,27 +102,6 @@ func (m CheckboxListModel) View() string {
 	}
 	if showBelow {
 		lines = append(lines, Muted.Render(Truncate(fmt.Sprintf("↓ %d more", countCheckboxItems(rows[end:])), width)))
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (m CheckboxListModel) viewWithInlineDetails(width int) string {
-	lines := make([]string, 0, len(m.list.Items()))
-	for index, item := range m.list.Items() {
-		checkboxItem, ok := item.(CheckboxItem)
-		if !ok {
-			continue
-		}
-
-		selected := m.focused && index == m.list.Index()
-		lines = append(lines, renderCheckboxItem(checkboxItem, width, selected)...)
-		if shouldRenderCheckboxDetails(checkboxItem, selected) {
-			lines = append(lines, renderCheckboxDetails(checkboxItem.Details, width)...)
-		}
-	}
-
-	for i, line := range lines {
-		lines[i] = strings.TrimRight(line, " ")
 	}
 	return strings.Join(lines, "\n")
 }
@@ -255,10 +229,6 @@ func (m *CheckboxListModel) SetSize(width, height int) {
 	m.keepCursorVisible()
 }
 
-func (m *CheckboxListModel) SetHideDetails(hide bool) {
-	m.hideDetails = hide
-}
-
 func (m *CheckboxListModel) SetFocused(focused bool) {
 	m.focused = focused
 }
@@ -359,44 +329,3 @@ func (d checkboxDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd {
 }
 
 func (d checkboxDelegate) Render(io.Writer, list.Model, int, list.Item) {}
-
-func renderCheckboxItem(item CheckboxItem, width int, selected bool) []string {
-	cursor := " "
-	if selected {
-		cursor = ">"
-	}
-
-	marker := "[ ]"
-	if item.Checked {
-		marker = "[x]"
-	}
-
-	lines := WrapLine(fmt.Sprintf("  %s ", cursor), fmt.Sprintf("%s %s", marker, item.Label), width)
-	for index, line := range lines {
-		switch {
-		case item.Checked:
-			lines[index] = Success.Render(line)
-		case selected:
-			lines[index] = Selected.Render(line)
-		default:
-			lines[index] = Muted.Render(line)
-		}
-	}
-
-	return lines
-}
-
-func shouldRenderCheckboxDetails(item CheckboxItem, selected bool) bool {
-	return len(item.Details) > 0 && (selected || item.Checked)
-}
-
-func renderCheckboxDetails(details []string, width int) []string {
-	lines := make([]string, 0, len(details))
-	for _, detail := range details {
-		for _, line := range WrapLine("      - ", detail, width) {
-			lines = append(lines, Muted.Render(line))
-		}
-	}
-
-	return lines
-}

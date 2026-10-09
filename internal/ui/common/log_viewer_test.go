@@ -109,3 +109,20 @@ func TestLogViewerRowsFitWidthAndKeepLongDetailsWhole(t *testing.T) {
 		t.Fatalf("expected the whole path to stay visible:\n%s", view)
 	}
 }
+
+func TestLogViewerUntitledSectionHasNoHeaderRowAndStillFolds(t *testing.T) {
+	viewer := NewLogViewer()
+	viewer.SetSize(40, 10)
+	viewer.SetSections([]LogSection{{ID: "run", Lines: numberedLogLines("line", 2), Folded: numberedLogLines("folded", 3), FoldedSummary: "3 more lines"}})
+
+	if got := topLogRow(viewer); got != "line1" {
+		t.Fatalf("expected the first line on the first row, got %q", got)
+	}
+	if got := viewer.Position(); got != "1–3 of 3" {
+		t.Fatalf("expected two lines and the fold summary only, got %q", got)
+	}
+	viewer.ToggleFolded("run")
+	if got := viewer.Position(); got != "1–5 of 5" || !strings.Contains(viewer.View(), "folded3") {
+		t.Fatalf("expected the folded lines after expanding, got %q:\n%s", got, viewer.View())
+	}
+}

@@ -256,7 +256,6 @@ func newCleanerOptionsList() common.CheckboxListModel {
 		},
 	}, 0, 0)
 	optionsList.SelectByID(optionBrowserProfiles)
-	optionsList.SetHideDetails(true)
 	return optionsList
 }
 
