@@ -20,7 +20,6 @@ The project is written in Go and builds into a single executable. After it is bu
 | Cleaner | Browser profile cleanup | Optionally removes Chrome/Chromium, Edge, Brave, CocCoc, Firefox, and Safari caches plus browser sign-ins, cookies, sessions, passwords, extensions, storage, history, and bookmarks. |
 | Cleaner | Windows Credential Manager | Optionally deletes allowlisted developer credentials on Windows. |
 | Cleaner | Force-stop target apps | Optionally stops browsers and IDEs before cleanup. |
-| Cleaner | Cleanup log | Writes a structured cleanup log under the current user profile. |
 | Cleaner | User-profile safety guard | Deletes only inside the current user profile, never through a link that leads outside it, and removes a symlinked file's link without touching its target. |
 | Network | Network & Diagnostics Manager | Inspects, diagnoses, cleans caches, and configures networking. |
 | Network | View current config | Shows adapter, DNS, IP, MTU, DoH, hosts, and ping information. |
@@ -61,6 +60,8 @@ To run from source or build the executable, install Go matching the version in `
 
 ## Installation
 
+Prebuilt binaries are published for Linux, macOS, and Windows on `amd64` and `arm64`. The installers download the latest GitHub Release over HTTPS, check its sha256 against the release's `checksums.txt`, and stop without installing if the check fails.
+
 ### Linux & macOS
 
 Install with the shell installer:
@@ -69,7 +70,13 @@ Install with the shell installer:
 curl -fsSL https://raw.githubusercontent.com/Patruxs/utils/main/install.sh | bash
 ```
 
-The installer supports the same environment variables as `install.sh`: `UTILS_REPO`, `UTILS_BIN`, and `UTILS_INSTALL_DIR`.
+It installs `utils` into `~/.local/bin` without `sudo`. Both installers read these environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `UTILS_INSTALL_DIR` | `~/.local/bin`, or `%USERPROFILE%\utils_bin` on Windows | Install directory |
+| `UTILS_REPO` | `Patruxs/utils` | GitHub repository to download releases from |
+| `UTILS_BIN` | `utils` | Binary and release asset name, for forks that rename it |
 
 Alternatively, install with Homebrew:
 
@@ -100,7 +107,7 @@ If you do not use `-AddToPath`, run it from the default install directory:
 & "$env:USERPROFILE\utils_bin\utils.exe"
 ```
 
-Windows users can also install with Scoop after the first release is published:
+Windows users can also install with Scoop:
 
 ```powershell
 scoop bucket add utils https://github.com/Patruxs/scoop-bucket.git
@@ -111,7 +118,9 @@ If you see `Access to the path 'C:\WINDOWS\System32\install.ps1' is denied`, you
 
 If the installer says `No published GitHub Release found`, UTILS has not published a downloadable Windows binary yet. The Windows installer does not require Go or GitHub CLI, but it does require a published GitHub Release asset such as `utils_v0.1.0_windows_amd64.zip`.
 
-More release and package-manager details are in [.codex/RELEASE.md](.codex/RELEASE.md).
+If you installed with Homebrew or Scoop, update and uninstall with `brew upgrade utils` / `brew uninstall utils` or `scoop update utils` / `scoop uninstall utils`; `utils --update` and `utils --uninstall` print that command and exit.
+
+Release publishing and download verification are described in [docs/RELEASE.md](docs/RELEASE.md).
 
 ## Development
 
@@ -155,7 +164,7 @@ Linux or macOS:
 | --- | --- |
 | Show the installed executable path | `utils --showPath` |
 | Update UTILS to the latest GitHub Release | `utils --update` |
-| Remove the currently running UTILS executable | `utils --uninstall` |
+| Remove the currently running UTILS executable, after confirmation | `utils --uninstall` |
 | Show the current UTILS version | `utils --version` |
 | Show available UTILS commands | `utils --help` |
 
