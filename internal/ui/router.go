@@ -10,7 +10,6 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 
 	"utils/internal/ui/common"
 	"utils/internal/ui/views"
@@ -60,7 +59,6 @@ type footerStatusModel interface {
 
 type Router struct {
 	menu          list.Model
-	help          help.Model
 	activeFeature AppFeature
 	activeModel   tea.Model
 	version       string
@@ -99,7 +97,6 @@ func NewRouterWithVersion(version string, features ...AppFeature) Router {
 
 	return Router{
 		menu:    menu,
-		help:    newFrameHelp(),
 		version: normalizeVersion(version),
 	}
 }
@@ -120,7 +117,6 @@ func (m Router) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.help.Width = m.bodyWidth()
 		m.menu.SetSize(m.bodyWidth(), common.MaxInt(1, m.bodyHeight()-m.menuLogoHeight()))
 
 		if m.activeModel != nil {
@@ -132,7 +128,7 @@ func (m Router) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.MouseMsg:
 		if m.activeModel != nil {
-			msg.X -= frameMarginX
+			msg.X -= common.MarginX
 			msg.Y -= m.headerHeight()
 			return m.updateActive(msg)
 		}
@@ -204,19 +200,22 @@ func ownsKeys(model tea.Model) bool {
 
 func (m Router) View() string {
 	width, height := m.terminalSize()
-	if width < minTerminalWidth || height < minTerminalHeight {
-		return tooSmallView(width, height)
+	if view, small := common.TooSmall(width, height); small {
+		return view
 	}
 
-	crumbs, body, keys, status := m.menuCrumbs(), m.menuBody(), help.KeyMap(menuKeys(m.menu)), m.menuStatus()
+	var crumbs []string
+	body, keys, status := m.menuBody(), help.KeyMap(menuKeys(m.menu)), m.menuStatus()
 	if m.activeFeature != nil && m.activeModel != nil {
 		crumbs, body, keys, status = m.activeCrumbs(), m.activeModel.View(), activeFooterKeys(m.activeModel), activeFooterStatus(m.activeModel)
 	}
 
-	rows := []string{frameHeader(m.bodyWidth(), crumbs, m.version, m.headerRule())}
-	rows = append(rows, fitBody(body, m.bodyWidth(), m.bodyHeight()))
-	rows = append(rows, frameFooter(m.help, m.bodyWidth(), keys, status))
-	return lipgloss.NewStyle().PaddingLeft(frameMarginX).Render(strings.Join(rows, "\n"))
+	rows := []string{
+		common.Header(m.bodyWidth(), height, crumbs, m.version),
+		fitBody(body, m.bodyWidth(), m.bodyHeight()),
+		common.Footer(m.bodyWidth(), keys, status),
+	}
+	return lipgloss.NewStyle().Padding(0, common.MarginX).Render(strings.Join(rows, "\n"))
 }
 
 func (m Router) terminalSize() (int, int) {
@@ -228,7 +227,7 @@ func (m Router) terminalSize() (int, int) {
 
 func (m Router) bodyWidth() int {
 	width, _ := m.terminalSize()
-	return common.MaxInt(1, width-2*frameMarginX)
+	return common.MaxInt(1, width-2*common.MarginX)
 }
 
 func (m Router) bodyHeight() int {
@@ -236,20 +235,9 @@ func (m Router) bodyHeight() int {
 	return common.MaxInt(1, height-m.headerHeight()-footerHeight)
 }
 
-func (m Router) headerRule() bool {
-	_, height := m.terminalSize()
-	return height >= headerRuleMinHeight
-}
-
 func (m Router) headerHeight() int {
-	if m.headerRule() {
-		return 2
-	}
-	return 1
-}
-
-func (m Router) menuCrumbs() []string {
-	return []string{menuCrumb}
+	_, height := m.terminalSize()
+	return common.HeaderHeight(height)
 }
 
 func (m Router) activeCrumbs() []string {
@@ -400,8 +388,8 @@ func (d menuDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	}
 
 	textWidth := common.MaxInt(1, m.Width()-2)
-	title := ansi.Truncate(entry.Title(), textWidth, "…")
-	description := common.Muted.Render(ansi.Truncate(entry.Description(), textWidth, "…"))
+	title := common.Truncate(entry.Title(), textWidth)
+	description := common.Muted.Render(common.Truncate(entry.Description(), textWidth))
 	gutter := "  "
 	if index == m.Index() {
 		gutter = common.Accent.Render("┃") + " "
@@ -411,65 +399,12 @@ func (d menuDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	fmt.Fprintf(w, "%s%s\n%s%s", gutter, title, gutter, description)
 }
 
-func newFrameHelp() help.Model {
-	frameHelp := common.NewHelpModel()
-	frameHelp.ShortSeparator = " · "
-	frameHelp.Styles.ShortKey = common.Selected
-	return frameHelp
-}
-
-func frameHeader(width int, crumbs []string, version string, rule bool) string {
-	left := lipgloss.NewStyle().Bold(true).Render(appName)
-	if len(crumbs) == 1 && crumbs[0] == menuCrumb {
-		left += "  " + menuCrumb
-	} else {
-		for _, crumb := range crumbs {
-			left += common.Muted.Render(" › ") + crumb
-		}
-	}
-	right := common.Muted.Render(versionLabel + " " + version)
-	line := joinEnds(width, left, right)
-	if !rule {
-		return line
-	}
-	return line + "\n" + common.Muted.Render(strings.Repeat("─", width))
-}
-
-func frameFooter(frameHelp help.Model, width int, keys help.KeyMap, status string) string {
-	hints := ""
-	if keys != nil {
-		frameHelp.Width = common.MaxInt(1, width-lipgloss.Width(status)-1)
-		hints = frameHelp.ShortHelpView(keys.ShortHelp())
-	}
-	return joinEnds(width, hints, status)
-}
-
-func joinEnds(width int, left, right string) string {
-	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 1 {
-		return ansi.Truncate(left, common.MaxInt(0, width-lipgloss.Width(right)-1), "…") + " " + right
-	}
-	return left + strings.Repeat(" ", gap) + right
-}
-
 func fitBody(body string, width, height int) string {
 	rows := strings.Split(strings.TrimRight(body, "\n"), "\n")
-	if len(rows) > height {
-		rows = rows[:height]
-	}
 	for index, row := range rows {
-		rows[index] = ansi.Truncate(row, width, "")
+		rows[index] = common.Truncate(row, width)
 	}
-	for len(rows) < height {
-		rows = append(rows, "")
-	}
-	return strings.Join(rows, "\n")
-}
-
-func tooSmallView(width, height int) string {
-	message := fmt.Sprintf("Terminal too small: need %d×%d, have %d×%d", minTerminalWidth, minTerminalHeight, width, height)
-	rows := append(common.WrapPlain(message, width), common.Muted.Render("ctrl+c quit"))
-	return strings.Join(rows, "\n")
+	return common.FitHeight(strings.Join(rows, "\n"), height)
 }
 
 type appFeature struct {
