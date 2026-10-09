@@ -152,6 +152,8 @@ func (k cleanerContextualKeyMap) ShortHelp() []key.Binding {
 		return []key.Binding{k.Move, k.Select, common.DefaultKeys.Yes, common.DefaultKeys.No}
 	case StatePromptingMode:
 		return []key.Binding{k.Move, k.Select, k.Run, k.Execute, common.DefaultKeys.No}
+	case StateFinished:
+		return []key.Binding{common.DefaultKeys.ScrollLog, common.DefaultKeys.BackToList, k.BackToMenu}
 	default:
 		return []key.Binding{k.Move, k.Toggle, k.Continue, k.BackToMenu}
 	}
@@ -172,6 +174,10 @@ func (k cleanerContextualKeyMap) FullHelp() [][]key.Binding {
 		return [][]key.Binding{
 			{k.Move, k.Select},
 			{k.Run, k.Execute, common.DefaultKeys.No},
+		}
+	case StateFinished:
+		return [][]key.Binding{
+			{common.DefaultKeys.ScrollLog, common.DefaultKeys.BackToList, k.BackToMenu},
 		}
 	default:
 		return [][]key.Binding{
@@ -334,6 +340,10 @@ func (m CleanerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.logViewer, cmd = m.logViewer.Update(msg)
 				cmds = append(cmds, cmd)
 				return m, batch(cmds...)
+			}
+			if key.Matches(msg, common.DefaultKeys.BackToList) {
+				m.state = StateSelectingOptions
+				return m, nil
 			}
 			fallthrough
 		case StateSelectingOptions:

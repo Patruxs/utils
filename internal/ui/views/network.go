@@ -220,6 +220,8 @@ func (k networkContextualKeyMap) ShortHelp() []key.Binding {
 		return []key.Binding{k.NextField, k.Select, k.LeaveForm}
 	case networkStateConfirmingWrite:
 		return []key.Binding{k.Move, k.Choose, common.DefaultKeys.Yes, common.DefaultKeys.No}
+	case networkStateFinished:
+		return []key.Binding{common.DefaultKeys.ScrollLog, common.DefaultKeys.BackToList, k.BackToMenu}
 	default:
 		return []key.Binding{k.Move, k.Toggle, k.Select, k.BackToMenu}
 	}
@@ -233,6 +235,8 @@ func (k networkContextualKeyMap) FullHelp() [][]key.Binding {
 		return [][]key.Binding{{k.NextField, k.Select, k.LeaveForm}}
 	case networkStateConfirmingWrite:
 		return [][]key.Binding{{k.Move, k.Choose, common.DefaultKeys.Yes, common.DefaultKeys.No}}
+	case networkStateFinished:
+		return [][]key.Binding{{common.DefaultKeys.ScrollLog, common.DefaultKeys.BackToList, k.BackToMenu}}
 	default:
 		return [][]key.Binding{{k.Move, k.Toggle, k.Select, k.BackToMenu}}
 	}
@@ -347,7 +351,7 @@ func (m NetworkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 				return m, batch(cmds...)
 			}
-			if key.Matches(msg, common.DefaultKeys.Enter) {
+			if key.Matches(msg, common.DefaultKeys.BackToList) {
 				m.state = networkStateSelectingOptions
 				return m, nil
 			}

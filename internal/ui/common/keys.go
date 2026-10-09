@@ -17,6 +17,8 @@ type GlobalKeyMap struct {
 
 	CancelRun     key.Binding
 	CancelAndQuit key.Binding
+	ScrollLog     key.Binding
+	BackToList    key.Binding
 }
 
 var DefaultKeys = GlobalKeyMap{
@@ -59,6 +61,14 @@ var DefaultKeys = GlobalKeyMap{
 	CancelAndQuit: key.NewBinding(
 		key.WithKeys("ctrl+c"),
 		key.WithHelp("ctrl+c", "cancel and quit"),
+	),
+	ScrollLog: key.NewBinding(
+		key.WithKeys("up", "down", "pgup", "pgdown"),
+		key.WithHelp("up/down/pgup/pgdn", "scroll log"),
+	),
+	BackToList: key.NewBinding(
+		key.WithKeys("enter"),
+		key.WithHelp("enter", "back to list"),
 	),
 }
 

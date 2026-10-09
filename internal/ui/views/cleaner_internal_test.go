@@ -84,6 +84,23 @@ func TestCleanerFinishedViewScrollsRecentActivityWithArrowKeys(t *testing.T) {
 	}
 }
 
+func TestCleanerEnterAfterRunReturnsToOptionsSoTheCursorMoves(t *testing.T) {
+	model := finishedCleanerModelWithActivities(t, 20)
+
+	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = next.(CleanerModel)
+	if model.state != StateSelectingOptions || cmd != nil {
+		t.Fatalf("expected enter after a finished run to return to options, state=%v", model.state)
+	}
+
+	next, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	next, _ = next.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune(" ")})
+	model = next.(CleanerModel)
+	if !model.optionsList.Checked(optionCredentialManager) || model.optionsList.Checked(optionBrowserProfiles) {
+		t.Fatal("expected down then space after a run to toggle the next option, not the one the cursor was on during the run")
+	}
+}
+
 func TestCleanerFinishedViewRequiresClickBeforeMouseWheelScroll(t *testing.T) {
 	model := finishedCleanerModelWithActivities(t, 20)
 
