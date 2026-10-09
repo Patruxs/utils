@@ -74,12 +74,13 @@ const (
 	logSectionSkipped  = "skipped"
 	logSectionNotes    = "notes"
 
-	cleanerShortTitle         = "Cleaner"
-	cleanerShortTitleMaxWidth = 60
-	cleanerTwoColumnMinWidth  = 100
-	cleanerShortDetailLines   = 2
-	cleanerActivityMinHeight  = 3
-	cleanerDefaultBodyHeight  = 21
+	cleanerShortTitle           = "Cleaner"
+	cleanerShortTitleMaxWidth   = 60
+	cleanerTwoColumnMinWidth    = 100
+	cleanerOptionsPanelMinWidth = 66
+	cleanerShortDetailLines     = 2
+	cleanerActivityMinHeight    = 3
+	cleanerDefaultBodyHeight    = 21
 )
 
 type cleanerKeyMap struct {
@@ -190,7 +191,7 @@ func NewCleanerModelWithRunner(run CleanerRunFunc) CleanerModel {
 	model := CleanerModel{
 		run: run,
 		spinner: spinner.New(
-			spinner.WithSpinner(spinner.Dot),
+			spinner.WithSpinner(trimmedSpinner(spinner.Dot)),
 			spinner.WithStyle(common.Accent),
 		),
 		keyMap:      newCleanerKeyMap(),
@@ -617,7 +618,7 @@ func (m CleanerModel) renderOptions(width, height int, fit optionsFit) string {
 	}
 
 	if width >= cleanerTwoColumnMinWidth && fit < fitDialogOnly {
-		leftWidth := width * 45 / 100
+		leftWidth := common.MaxInt(width*45/100, cleanerOptionsPanelMinWidth)
 		rightWidth := width - leftWidth - 1
 		left := m.renderOptionsPanel(leftWidth, 0)
 		right := []string{m.renderActionPanel(rightWidth, fit)}
@@ -705,7 +706,7 @@ func (m CleanerModel) renderModePanel(width int) string {
 	lines = append(lines,
 		"",
 		common.RenderChoices(inner, []common.Choice{
-			{Label: "Dry-run", Detail: "list what would be deleted, change nothing"},
+			{Label: "Dry-run", Detail: "only list what would be deleted"},
 			{Label: "Execute", Detail: "delete matching files (asks again)"},
 			{Label: "Cancel", Detail: "back to options"},
 		}, int(m.modeSelection)),
@@ -756,7 +757,7 @@ func (m CleanerModel) renderRunning(width int) string {
 		label = "Running execute cleanup…"
 		note = "Execute deletes matching files inside your user profile."
 	}
-	return common.RunStatus(width, strings.TrimRight(m.spinner.View(), " "), label, note, m.elapsed())
+	return common.RunStatus(width, m.spinner.View(), label, note, m.elapsed())
 }
 
 func (m CleanerModel) elapsed() time.Duration {
@@ -921,6 +922,14 @@ func displayPath(home, path string) string {
 		return path
 	}
 	return filepath.Join("~", rel)
+}
+
+func trimmedSpinner(base spinner.Spinner) spinner.Spinner {
+	frames := make([]string, len(base.Frames))
+	for i, frame := range base.Frames {
+		frames[i] = strings.TrimSpace(frame)
+	}
+	return spinner.Spinner{Frames: frames, FPS: base.FPS}
 }
 
 func runCleaner(ctx context.Context, run CleanerRunFunc, options cleaner.Options) tea.Cmd {
