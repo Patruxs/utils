@@ -36,9 +36,9 @@ const (
 	networkActionResetDNS
 	networkActionResetDefaults
 	networkActionHostsView
+	networkActionHostsBackup
 	networkActionHostsAdd
 	networkActionHostsRemoveCustom
-	networkActionHostsBackup
 	networkActionHostsRestore
 	networkActionBrowserChrome
 	networkActionBrowserFirefox
@@ -57,6 +57,7 @@ type networkViewState int
 const (
 	networkStateSelectingOptions networkViewState = iota
 	networkStateEditingHostsAdd
+	networkStateConfirmingWrite
 	networkStateRunning
 	networkStateFinished
 )
@@ -64,6 +65,7 @@ const (
 type networkKeyMap struct {
 	Move       key.Binding
 	Select     key.Binding
+	Choose     key.Binding
 	Toggle     key.Binding
 	NextField  key.Binding
 	CancelRun  key.Binding
@@ -93,6 +95,8 @@ type NetworkModel struct {
 	hostDomainInput  textinput.Model
 	hostIPInput      textinput.Model
 	focusedHostField int
+	pendingRun       networkRunOptions
+	confirmRun       bool
 }
 
 type NetworkLogViewerModel struct {
@@ -123,7 +127,7 @@ var _ tea.Model = NetworkModel{}
 const (
 	networkTitle        = "Network & Diagnostics Manager"
 	networkSubtitle     = "Cross-platform network inspection, diagnostics, cache clearing, and per-command elevated configuration."
-	networkBaselineNote = "The TUI stays in standard-user mode. DNS, DoH, MTU, reset, and hosts writes request Administrator/root only for that command, then warn and retry standard-user fallback if elevation is denied."
+	networkBaselineNote = "Read-only actions run as your user. Write actions show what they change and ask for confirmation first."
 	networkRunTimeout   = 2 * time.Minute
 
 	defaultNetworkLogViewportHeight = 12
@@ -150,10 +154,10 @@ var networkActions = []networkActionItem{
 	{networkActionResetDNS, "Reset DNS to Automatic", []string{"Resets DNS to DHCP/automatic/default resolver behavior and flushes caches where supported."}},
 	{networkActionResetDefaults, "Reset Network Settings to Defaults", []string{"Resets DNS, disables DoH where supported, and clears persistent DNS settings."}},
 	{networkActionHostsView, "Hosts: View File", []string{"Reads the hosts file without elevation."}},
-	{networkActionHostsAdd, "Hosts: Add Entry", []string{"Prompts for domain and IP, then appends IP<TAB>domain with per-command elevation."}},
-	{networkActionHostsRemoveCustom, "Hosts: Remove Custom Entries", []string{"Preserves comments, localhost entries, and blank lines, matching tool.ps1."}},
-	{networkActionHostsBackup, "Hosts: Backup File", []string{"Copies hosts to hosts.backup."}},
-	{networkActionHostsRestore, "Hosts: Restore Backup", []string{"Restores hosts.backup over the active hosts file."}},
+	{networkActionHostsBackup, "Hosts: Backup File", []string{"Copies hosts to a timestamped hosts.backup-<time> file."}},
+	{networkActionHostsAdd, "Hosts: Add Entry", []string{"Prompts for domain and IP, then appends IP<TAB>domain<TAB>" + corenetwork.HostsManagedMarker + " with per-command elevation."}},
+	{networkActionHostsRemoveCustom, "Hosts: Remove Managed Entries", []string{"Removes only lines tagged " + corenetwork.HostsManagedMarker + " and lists the unmanaged lines it left alone."}},
+	{networkActionHostsRestore, "Hosts: Restore Newest Backup", []string{"Saves the current hosts as hosts.before-restore-<time>, then restores the newest hosts.backup-<time>."}},
 	{networkActionBrowserChrome, "Clear Chrome/Chromium Cache", []string{"Clears common Chrome and Chromium cache/code-cache paths for the current user."}},
 	{networkActionBrowserFirefox, "Clear Firefox Cache", []string{"Clears Firefox profile cache2 folders for the current user."}},
 	{networkActionBrowserEdge, "Clear Edge Cache", []string{"Clears common Microsoft Edge cache/code-cache paths for the current user."}},
@@ -175,6 +179,10 @@ func newNetworkKeyMap() networkKeyMap {
 		Select: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter:", "run checked"),
+		),
+		Choose: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter:", "apply choice"),
 		),
 		Toggle: key.NewBinding(
 			key.WithKeys(" "),
@@ -208,6 +216,8 @@ func (k networkContextualKeyMap) ShortHelp() []key.Binding {
 		return []key.Binding{k.CancelRun}
 	case networkStateEditingHostsAdd:
 		return []key.Binding{k.NextField, k.Select, k.BackToMenu}
+	case networkStateConfirmingWrite:
+		return []key.Binding{k.Move, k.Choose, common.DefaultKeys.Yes, common.DefaultKeys.No}
 	default:
 		return []key.Binding{k.Move, k.Toggle, k.Select, k.BackToMenu}
 	}
@@ -219,6 +229,8 @@ func (k networkContextualKeyMap) FullHelp() [][]key.Binding {
 		return [][]key.Binding{{k.CancelRun}}
 	case networkStateEditingHostsAdd:
 		return [][]key.Binding{{k.NextField, k.Select, k.BackToMenu}}
+	case networkStateConfirmingWrite:
+		return [][]key.Binding{{k.Move, k.Choose, common.DefaultKeys.Yes, common.DefaultKeys.No}}
 	default:
 		return [][]key.Binding{{k.Move, k.Toggle, k.Select, k.BackToMenu}}
 	}
@@ -319,12 +331,18 @@ func (m NetworkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, batch(cmds...)
 		case networkStateEditingHostsAdd:
 			return m.updateHostsAddForm(msg, cmds...)
+		case networkStateConfirmingWrite:
+			return m.updateWriteConfirmation(msg)
 		case networkStateFinished:
 			if m.logViewer.IsKeyScrollInput(msg) {
 				var cmd tea.Cmd
 				m.logViewer, cmd = m.logViewer.Update(msg)
 				cmds = append(cmds, cmd)
 				return m, batch(cmds...)
+			}
+			if key.Matches(msg, common.DefaultKeys.Enter) {
+				m.state = networkStateSelectingOptions
+				return m, nil
 			}
 			fallthrough
 		case networkStateSelectingOptions:
@@ -389,8 +407,22 @@ func (m NetworkModel) View() string {
 		b.WriteString("\n")
 		b.WriteString(m.hostIPInput.View())
 		b.WriteString("\n\n")
+	case networkStateConfirmingWrite:
+		b.WriteString(layout.RenderWrapped("These actions change your system:", common.Error.Render))
+		b.WriteString("\n")
+		for _, change := range m.pendingChanges() {
+			b.WriteString(layout.RenderWrapped("- "+change, func(strs ...string) string {
+				return strings.Join(strs, "")
+			}))
+			b.WriteString("\n")
+		}
+		b.WriteString(layout.RenderWrapped(corenetwork.ElevationNote(), common.Muted.Render))
+		b.WriteString("\n\n")
+		b.WriteString(confirmationRow(!m.confirmRun, "Cancel"))
+		b.WriteString(confirmationRow(m.confirmRun, "Run these changes"))
+		b.WriteString("\n")
 	default:
-		b.WriteString(layout.RenderWrapped(networkBaselineNote, common.Muted.Render))
+		b.WriteString(layout.RenderWrapped(networkBaselineNote+" "+corenetwork.ElevationNote(), common.Muted.Render))
 		b.WriteString("\n")
 		persistence := "off"
 		if m.persistentMode {
@@ -489,7 +521,121 @@ func (m NetworkModel) startSelectedAction() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	return m.startRun(networkRunOptions{actions: actions})
+	return m.requestRun(networkRunOptions{actions: actions})
+}
+
+func (m NetworkModel) requestRun(options networkRunOptions) (tea.Model, tea.Cmd) {
+	for _, action := range options.actions {
+		if !isReadOnlyNetworkAction(action) {
+			m.state = networkStateConfirmingWrite
+			m.pendingRun = options
+			m.confirmRun = false
+			m.notice = ""
+			return m, nil
+		}
+	}
+	return m.startRun(options)
+}
+
+func (m NetworkModel) updateWriteConfirmation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, common.DefaultKeys.Yes):
+		return m.startRun(m.pendingRun)
+	case key.Matches(msg, common.DefaultKeys.No):
+		return m.cancelWriteConfirmation()
+	case key.Matches(msg, common.DefaultKeys.Up, common.DefaultKeys.Down):
+		m.confirmRun = !m.confirmRun
+	case key.Matches(msg, common.DefaultKeys.Enter, common.DefaultKeys.Space):
+		if m.confirmRun {
+			return m.startRun(m.pendingRun)
+		}
+		return m.cancelWriteConfirmation()
+	}
+	return m, nil
+}
+
+func (m NetworkModel) cancelWriteConfirmation() (tea.Model, tea.Cmd) {
+	m.state = networkStateSelectingOptions
+	m.pendingRun = networkRunOptions{}
+	m.notice = "Canceled; nothing was changed."
+	return m, nil
+}
+
+func (m NetworkModel) pendingChanges() []string {
+	changes := make([]string, 0, len(m.pendingRun.actions))
+	for _, action := range m.pendingRun.actions {
+		if isReadOnlyNetworkAction(action) {
+			continue
+		}
+		changes = append(changes, actionTitle(action)+": "+m.networkActionChange(action))
+	}
+	return changes
+}
+
+func isReadOnlyNetworkAction(action networkActionID) bool {
+	switch action {
+	case networkActionViewConfig, networkActionDiagnostics, networkActionHostsView, networkActionPersistentStatus:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m NetworkModel) networkActionChange(action networkActionID) string {
+	hostsPath := corenetwork.HostsPath()
+	switch action {
+	case networkActionApplyConfig:
+		preset := corenetwork.DefaultConfigOptions()
+		return fmt.Sprintf("replaces the DNS servers of every active connection with %s and %s, registers Windows DoH templates, and sets MTU %d on every active interface.", preset.DNSPrimary, preset.DNSSecondary, preset.MTU)
+	case networkActionSetCloudflareDNS:
+		return dnsPresetChange(corenetwork.CloudflareDNSOptions())
+	case networkActionSetGoogleDNS:
+		return dnsPresetChange(corenetwork.GoogleDNSOptions())
+	case networkActionSetOpenDNS:
+		return dnsPresetChange(corenetwork.OpenDNSOptions())
+	case networkActionSetQuad9DNS:
+		return dnsPresetChange(corenetwork.Quad9DNSOptions())
+	case networkActionFlushDNS:
+		return "flushes the operating system DNS cache."
+	case networkActionEnableDoH:
+		return "registers DoH templates for Cloudflare, Google and Quad9 (Windows only)."
+	case networkActionDisableDoH:
+		return "removes every registered DoH template, including Windows built-in ones (Windows only)."
+	case networkActionOptimize:
+		return "changes TCP settings and sets MTU 1500 on every active interface."
+	case networkActionResetOptimizations:
+		return "Windows: runs netsh int tcp reset and netsh winsock reset (restart needed). macOS/Linux: resets TCP sysctls and MTU on every active interface."
+	case networkActionResetDNS:
+		return "clears manually set DNS servers on every active connection and returns to automatic DNS."
+	case networkActionResetDefaults:
+		return "resets DNS to automatic, removes Windows DoH templates, and deletes the saved persistent DNS settings."
+	case networkActionHostsBackup:
+		return fmt.Sprintf("copies %s to %s.backup-<time>.", hostsPath, hostsPath)
+	case networkActionHostsAdd:
+		return fmt.Sprintf("appends \"%s\t%s\t%s\" to %s.", m.pendingRun.hosts.IP, m.pendingRun.hosts.Domain, corenetwork.HostsManagedMarker, hostsPath)
+	case networkActionHostsRemoveCustom:
+		return fmt.Sprintf("removes lines tagged %s from %s; all other lines stay.", corenetwork.HostsManagedMarker, hostsPath)
+	case networkActionHostsRestore:
+		return fmt.Sprintf("saves %s as %s.before-restore-<time>, then overwrites it with the newest %s.backup-<time>.", hostsPath, hostsPath, hostsPath)
+	case networkActionBrowserChrome, networkActionBrowserFirefox, networkActionBrowserEdge, networkActionBrowserBrave, networkActionBrowserOpera, networkActionBrowserAll:
+		return "deletes the cache folders listed above for the current user."
+	case networkActionTogglePersistent:
+		if m.persistentMode {
+			return "turns persistent DNS mode off and deletes the saved DNS settings."
+		}
+		preset := corenetwork.DefaultConfigOptions()
+		return fmt.Sprintf("turns persistent DNS mode on and saves %s (%s, %s) as the persistent DNS.", preset.DNSName, preset.DNSPrimary, preset.DNSSecondary)
+	case networkActionApplyPersistent:
+		return "replaces the DNS servers of every active connection with the saved persistent DNS."
+	case networkActionClearPersistent:
+		return "deletes the saved persistent DNS settings."
+	default:
+		return "changes system settings."
+	}
+}
+
+func dnsPresetChange(preset corenetwork.ConfigOptions) string {
+	return fmt.Sprintf("replaces the DNS servers of every active connection with %s and %s.", preset.DNSPrimary, preset.DNSSecondary)
 }
 
 func (m NetworkModel) updateHostsAddForm(msg tea.KeyMsg, cmds ...tea.Cmd) (tea.Model, tea.Cmd) {
@@ -513,7 +659,11 @@ func (m NetworkModel) updateHostsAddForm(msg tea.KeyMsg, cmds ...tea.Cmd) (tea.M
 		if ip == "" {
 			ip = "127.0.0.1"
 		}
-		return m.startRun(networkRunOptions{
+		if err := corenetwork.ValidateHostsEntry(ip, domain); err != nil {
+			m.notice = err.Error()
+			return m, nil
+		}
+		return m.requestRun(networkRunOptions{
 			actions: m.selectedOrCurrentActionIDs(),
 			hosts: corenetwork.HostsOptions{
 				Mode:   corenetwork.HostsAdd,
@@ -562,6 +712,8 @@ func (m NetworkModel) startRun(options networkRunOptions) (tea.Model, tea.Cmd) {
 	}
 	options.persistentMode = m.persistentMode
 	options.actions = actions
+	m.pendingRun = networkRunOptions{}
+	m.checkedActions = make(map[networkActionID]bool)
 
 	ctx, cancel := context.WithTimeout(context.Background(), networkRunTimeout)
 	m.cancelNetwork = cancel

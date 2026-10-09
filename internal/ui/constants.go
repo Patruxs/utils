@@ -12,5 +12,5 @@ const (
 	featureCleanerTitle       = "System & Credential Cleaner"
 	featureCleanerDescription = "Dry-run-first cleanup for local dev credentials, shell history, IDE auth/cache/data, and user-profile caches."
 	featureNetworkTitle       = "Network & Diagnostics Manager"
-	featureNetworkDescription = "Inspect and diagnose networking, then attempt elevated DNS, DoH, MTU, and hosts configuration with standard-user fallbacks."
+	featureNetworkDescription = "Inspect and diagnose networking, then apply confirmed, elevated DNS, DoH, MTU, and hosts changes."
 )
