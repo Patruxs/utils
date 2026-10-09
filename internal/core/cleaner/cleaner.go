@@ -222,6 +222,32 @@ func (c Cleaner) Run(ctx context.Context, opts Options) (Report, error) {
 	return c.finishRun(report, runErrors)
 }
 
+func SaveLog(path string, report Report) (string, error) {
+	return NewCleaner(nil, nil).SaveLog(path, report)
+}
+
+func (c Cleaner) SaveLog(path string, report Report) (string, error) {
+	c = c.withDefaults()
+
+	home, _, err := c.resolveHome()
+	if err != nil {
+		return "", err
+	}
+
+	logPath, err := c.resolveLogPath(path, home)
+	if err != nil {
+		return "", err
+	}
+	if logPath == "" {
+		return "", errors.New("no cleanup log path given")
+	}
+
+	if err := c.writeLog(logPath, report.Entries); err != nil {
+		return logPath, fmt.Errorf("write cleanup log: %w", err)
+	}
+	return logPath, nil
+}
+
 func (c Cleaner) finishRun(report Report, runErrors []error) (Report, error) {
 	if report.LogPath != "" {
 		if err := c.writeLog(report.LogPath, report.Entries); err != nil {

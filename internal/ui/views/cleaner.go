@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -20,104 +19,137 @@ import (
 	"utils/internal/ui/common"
 )
 
-type executeConfirmationSelection int
+type cleanerState int
 
 const (
-	confirmationCancel executeConfirmationSelection = iota
-	confirmationRun
-	confirmationCount
+	cleanerScope cleanerState = iota
+	cleanerRunning
+	cleanerResult
 )
 
-type cleanupModeSelection int
+type cleanerFocus int
 
 const (
-	cleanupModeDryRun cleanupModeSelection = iota
-	cleanupModeExecute
-	cleanupModeCancel
-	cleanupModeCount
+	focusScope cleanerFocus = iota
+	focusPreview
 )
 
-type optionsFit int
-
-const (
-	fitFull optionsFit = iota
-	fitWithoutSubtitle
-	fitWithoutNotes
-	fitShortDetails
-	fitScrollList
-	fitDialogOnly
-)
-
-type ViewState int
-
-const (
-	StateSelectingOptions ViewState = iota
-	StatePromptingMode
-	StateConfirmingExecute
-	StateRunning
-	StateFinished
-)
-
-const (
-	logSectionErrors   = "errors"
-	logSectionWarnings = "warnings"
-	logSectionRemovals = "removals"
-	logSectionSkipped  = "skipped"
-	logSectionNotes    = "notes"
-
-	cleanerShortTitle         = "Cleaner"
-	cleanerShortTitleMaxWidth = 60
-	cleanerShortDetailLines   = 2
-	cleanerActivityMinHeight  = 3
-	cleanerDefaultBodyHeight  = 21
-)
-
-type cleanerKeyMap struct {
-	Move          key.Binding
-	Toggle        key.Binding
-	Continue      key.Binding
-	Menu          key.Binding
-	Choose        key.Binding
-	Select        key.Binding
-	Run           key.Binding
-	Execute       key.Binding
-	ConfirmPrev   key.Binding
-	ConfirmNext   key.Binding
-	ConfirmChoose key.Binding
-	CancelPrompt  key.Binding
-	CancelConfirm key.Binding
-	Scroll        key.Binding
-	ToggleSkipped key.Binding
-	BackToOptions key.Binding
-}
-
-type cleanerContextualKeyMap struct {
-	cleanerKeyMap
-	state          ViewState
-	canFoldSkipped bool
-}
+type CleanerPlanFunc func(context.Context, cleaner.Options) (cleaner.Plan, error)
 
 type CleanerRunFunc func(context.Context, cleaner.Options) (cleaner.Report, error)
 
+type CleanerSaveFunc func(string, cleaner.Report) (string, error)
+
+type scopeRow struct {
+	id          cleaner.GroupID
+	name        string
+	help        string
+	notUndoable bool
+	destructive bool
+}
+
+var cleanerScopeRows = []scopeRow{
+	{cleaner.GroupCredentials, "Credentials and tokens", "Token and credential files for cloud, Git, package and AI tools. Always on.", true, false},
+	{cleaner.GroupSSHKeys, "SSH keys", "Private keys in ~/.ssh, ssh config and known_hosts. Off by default.", true, true},
+	{cleaner.GroupShellHistory, "Shell and tool history", "Shell, REPL, database and debugger histories that may hold typed secrets.", true, false},
+	{cleaner.GroupBrowserProfiles, "Browser profiles", "Whole browser profiles and caches: sign-ins, cookies, passwords, bookmarks.", true, true},
+	{cleaner.GroupFullToolReset, "Full tool reset", "Whole tool folders: runtimes, VMs, IDE data, AI tool data and .gitconfig.", true, true},
+	{cleaner.GroupCredentialManager, "Windows Credential Mgr", "Allowlisted dev entries in Windows Credential Manager. Windows only.", true, false},
+	{cleaner.GroupForceStop, "Force-stop apps", "Stops running browsers and editors right before deleting. Never in the preview.", false, false},
+}
+
+type cleanerKeyMap struct {
+	Move       key.Binding
+	Toggle     key.Binding
+	Delete     key.Binding
+	SaveDryRun key.Binding
+	ToPreview  key.Binding
+	ToScope    key.Binding
+	Page       key.Binding
+	Info       key.Binding
+	Scroll     key.Binding
+	Back       key.Binding
+	SaveLog    key.Binding
+	Cancel     key.Binding
+	CancelQuit key.Binding
+	PageUp     key.Binding
+	PageDown   key.Binding
+	Left       key.Binding
+	Right      key.Binding
+	ScrollUp   key.Binding
+	ScrollDown key.Binding
+}
+
+func newCleanerKeyMap() cleanerKeyMap {
+	return cleanerKeyMap{
+		Move:       key.NewBinding(key.WithKeys("up", "down", "k", "j"), key.WithHelp("↑↓", "move")),
+		Toggle:     key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
+		Delete:     key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "delete…")),
+		SaveDryRun: key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "save dry-run log")),
+		ToPreview:  key.NewBinding(key.WithKeys("right", "l"), key.WithHelp("→", "preview")),
+		ToScope:    key.NewBinding(key.WithKeys("left", "h"), key.WithHelp("←", "scope")),
+		Page:       key.NewBinding(key.WithKeys("pgup", "pgdown"), key.WithHelp("pgup pgdn", "scroll")),
+		Info:       key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "info")),
+		Scroll:     key.NewBinding(key.WithKeys("up", "down", "k", "j"), key.WithHelp("↑↓", "scroll")),
+		Back:       key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "back to scope")),
+		SaveLog:    key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "save log")),
+		Cancel:     key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
+		CancelQuit: key.NewBinding(key.WithKeys("ctrl+c"), key.WithHelp("ctrl+c", "cancel and quit")),
+		PageUp:     key.NewBinding(key.WithKeys("pgup")),
+		PageDown:   key.NewBinding(key.WithKeys("pgdown")),
+		Left:       key.NewBinding(key.WithKeys("left", "h")),
+		Right:      key.NewBinding(key.WithKeys("right", "l")),
+		ScrollUp:   key.NewBinding(key.WithKeys("up", "k")),
+		ScrollDown: key.NewBinding(key.WithKeys("down", "j")),
+	}
+}
+
 type CleanerModel struct {
-	run           CleanerRunFunc
-	spinner       spinner.Model
-	keyMap        cleanerKeyMap
-	optionsList   common.CheckboxListModel
-	logViewer     common.LogViewer
-	options       cleaner.Options
-	report        *cleaner.Report
-	err           error
-	canceled      bool
-	cancelCleanup context.CancelFunc
-	notice        string
-	home          string
-	width         int
-	height        int
-	startedAt     time.Time
-	state         ViewState
-	confirmation  executeConfirmationSelection
-	modeSelection cleanupModeSelection
+	plan    CleanerPlanFunc
+	run     CleanerRunFunc
+	save    CleanerSaveFunc
+	keys    cleanerKeyMap
+	spinner spinner.Model
+	home    string
+	width   int
+	height  int
+
+	state    cleanerState
+	options  cleaner.Options
+	cursor   int
+	focus    cleanerFocus
+	showInfo bool
+	confirm  common.Confirm
+
+	preview       *cleaner.Plan
+	previewErr    error
+	scanSeq       int
+	scanning      bool
+	previewOffset int
+
+	cancelRun context.CancelFunc
+	canceling bool
+	startedAt time.Time
+	elapsed   time.Duration
+	done      int
+	total     int
+	activity  []cleaner.Entry
+
+	report       *cleaner.Report
+	runErr       error
+	canceled     bool
+	resultOffset int
+}
+
+type cleanerPlanMsg struct {
+	seq  int
+	plan cleaner.Plan
+	err  error
+}
+
+type cleanerProgressMsg struct {
+	progress cleaner.Progress
+	events   <-chan tea.Msg
 }
 
 type cleanerFinishedMsg struct {
@@ -126,427 +158,354 @@ type cleanerFinishedMsg struct {
 	canceled bool
 }
 
+type cleanerLogSavedMsg struct {
+	path string
+	err  error
+}
+
 var _ tea.Model = CleanerModel{}
 
-func newCleanerKeyMap() cleanerKeyMap {
-	return cleanerKeyMap{
-		Move:          key.NewBinding(key.WithKeys("up", "down", "k", "j"), key.WithHelp("↑↓", "move")),
-		Toggle:        key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "toggle")),
-		Continue:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "run")),
-		Menu:          key.NewBinding(key.WithKeys("q", "esc"), key.WithHelp("esc", "menu")),
-		Choose:        key.NewBinding(key.WithKeys("up", "down", "k", "j"), key.WithHelp("↑↓", "choose")),
-		Select:        key.NewBinding(key.WithKeys("enter", " "), key.WithHelp("enter", "select")),
-		Run:           key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "dry-run")),
-		Execute:       key.NewBinding(key.WithKeys("e", "x"), key.WithHelp("e", "execute")),
-		ConfirmPrev:   key.NewBinding(key.WithKeys("left", "h")),
-		ConfirmNext:   key.NewBinding(key.WithKeys("right", "l")),
-		ConfirmChoose: key.NewBinding(key.WithKeys("left", "right", "h", "l"), key.WithHelp("←→", "choose")),
-		CancelPrompt:  key.NewBinding(key.WithKeys("n", "esc"), key.WithHelp("esc", "back")),
-		CancelConfirm: key.NewBinding(key.WithKeys("n", "esc"), key.WithHelp("n/esc", "cancel")),
-		Scroll:        key.NewBinding(key.WithKeys("up", "down", "pgup", "pgdown"), key.WithHelp("↑↓", "scroll")),
-		ToggleSkipped: key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "skipped")),
-		BackToOptions: key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "options")),
-	}
-}
-
-func (k cleanerContextualKeyMap) ShortHelp() []key.Binding {
-	switch k.state {
-	case StateRunning:
-		return []key.Binding{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit}
-	case StateConfirmingExecute:
-		return []key.Binding{k.ConfirmChoose, k.Select, common.DefaultKeys.Yes, k.CancelConfirm}
-	case StatePromptingMode:
-		return []key.Binding{k.Run, k.Execute, k.Choose, k.Select, k.CancelPrompt}
-	case StateFinished:
-		if k.canFoldSkipped {
-			return []key.Binding{k.Scroll, k.ToggleSkipped, k.BackToOptions, k.Menu}
-		}
-		return []key.Binding{k.Scroll, k.BackToOptions, k.Menu}
-	default:
-		return []key.Binding{k.Move, k.Toggle, k.Continue, k.Menu}
-	}
-}
-
-func (k cleanerContextualKeyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{k.ShortHelp()}
-}
-
 func NewCleanerModel() CleanerModel {
-	return NewCleanerModelWithRunner(cleaner.Run)
+	return NewCleanerModelWith(cleaner.PlanCleanup, cleaner.Run, cleaner.SaveLog)
 }
 
-func NewCleanerModelWithRunner(run CleanerRunFunc) CleanerModel {
+func NewCleanerModelWith(plan CleanerPlanFunc, run CleanerRunFunc, save CleanerSaveFunc) CleanerModel {
 	home, _ := os.UserHomeDir()
-	model := CleanerModel{
-		run: run,
+	return CleanerModel{
+		plan: plan,
+		run:  run,
+		save: save,
+		keys: newCleanerKeyMap(),
 		spinner: spinner.New(
 			spinner.WithSpinner(trimmedSpinner(spinner.Dot)),
 			spinner.WithStyle(common.Accent),
 		),
-		keyMap:      newCleanerKeyMap(),
-		optionsList: newCleanerOptionsList(),
-		logViewer:   common.NewLogViewer(),
-		home:        home,
-	}
-	model.layoutComponents()
-	return model
-}
-
-func newCleanerOptionsList() common.CheckboxListModel {
-	optionsList := common.NewCheckboxList([]common.CheckboxItem{
-		{
-			ID:    optionSSHKeys,
-			Label: "Include SSH keys",
-			Details: []string{
-				"Adds .ssh/config, known_hosts, id_* key files, and any other file directly in .ssh that starts with a PRIVATE KEY header.",
-				"Execute deletes local SSH keys; dry-run only lists those file deletions.",
-			},
-			FilterText: "ssh keys credentials private public",
-		},
-		{
-			ID:    optionBrowserProfiles,
-			Label: "Include browser profiles",
-			Details: []string{
-				"Adds full Chrome, Edge, Brave, CocCoc, Firefox, and Safari profile folders and their caches.",
-				"Execute removes local sign-ins, cookies/sessions, saved passwords, extensions, local storage, history, and bookmarks.",
-			},
-			FilterText: "browser profiles include caches",
-		},
-		{
-			ID:      optionCredentialManager,
-			Label:   "Clean Windows Credential Manager allowlist",
-			Tag:     credentialManagerTag(),
-			TagTone: common.ToneSubtle,
-			Details: []string{
-				"Windows only: scans Credential Manager for allowlisted dev entries such as Git, cloud CLIs, Docker, kube, npm, Terraform, Visual Studio, VS Code, Copilot, and AI tools.",
-				"Dry-run lists matching entries; execute deletes only those allowlisted matches.",
-			},
-			FilterText: "windows credential manager allowlist credentials",
-		},
-		{
-			ID:      optionForceStop,
-			Label:   "Force stop running target processes",
-			Tag:     "also in dry-run",
-			TagTone: common.ToneWarning,
-			Details: []string{
-				"Stops running Chrome, Edge, Firefox, VS Code, and Visual Studio before cleanup so locked auth/profile files can be handled.",
-				"This happens in dry-run too. Dry-run still only logs file and Credential Manager deletions.",
-			},
-			FilterText: "force stop kill running target processes browsers ides ai apps",
-		},
-		{
-			ID:    optionShellHistory,
-			Label: "Clean shell and tool history",
-			Details: []string{
-				"Adds bash, zsh, fish, PowerShell, Python, Node, database, and debugger history files, which may hold typed secrets.",
-				"Execute deletes those history files; dry-run only lists them.",
-			},
-			FilterText: "shell tool history repl database debugger secrets",
-		},
-		{
-			ID:    optionFullToolReset,
-			Label: "Full tool reset",
-			Details: []string{
-				"Adds whole tool folders and settings: .gitconfig, .mongorc.js, .aws/config, .claude, .codex, .gemini, .bun, .deno, .lima, .colima, .minikube, .vagrant.d, .jupyter, cloud CLI folders, VS Code global state (settings database, extension state, sign-ins) and other IDE data, and Copilot extensions.",
-				"Execute removes installed runtimes, local VMs, tool settings, and IDE history and backups; dry-run only lists them.",
-			},
-			FilterText: "full tool reset folders settings runtimes vms ide ai",
-		},
-	}, 0, 0)
-	optionsList.SelectByID(optionBrowserProfiles)
-	return optionsList
-}
-
-func cleanerOptionSummaries() []struct{ id, summary string } {
-	return []struct{ id, summary string }{
-		{optionSSHKeys, "SSH keys"},
-		{optionBrowserProfiles, "Browser profiles and caches"},
-		{optionCredentialManager, "Windows Credential Manager allowlist entries"},
-		{optionForceStop, "Force stop running browsers and IDEs first"},
-		{optionShellHistory, "Shell and tool histories"},
-		{optionFullToolReset, "Full tool reset: whole tool folders and IDE data"},
+		home:     home,
+		scanning: true,
 	}
 }
 
 func (m CleanerModel) Init() tea.Cmd {
-	return nil
+	return scanCleanerCmd(m.plan, m.scanSeq, m.options)
 }
 
 func (m CleanerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	next, cmd := m.update(msg)
-	laidOut := next.(CleanerModel)
-	laidOut.layoutComponents()
-	return laidOut, cmd
-}
-
-func (m CleanerModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-	if m.state == StateRunning {
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		cmds = append(cmds, cmd)
-	}
-
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-	case cleanerFinishedMsg:
-		if m.cancelCleanup != nil {
-			m.cancelCleanup()
-			m.cancelCleanup = nil
-		}
-		m.state = StateFinished
-		m.report = &msg.report
-		m.err = msg.err
-		m.canceled = msg.canceled
-		m.notice = ""
-		m.logViewer.SetMouseFocused(false)
-		m.logViewer.SetSections(cleanerLogSections(msg.report, cleanerUnreportedError(msg.report, msg.err, msg.canceled), m.options.Execute, m.home))
+		m.width, m.height = msg.Width, msg.Height
+		m.clampScroll()
 		return m, nil
+	case common.ActivatedMsg:
+		if m.state == cleanerScope && !m.confirm.Open() {
+			return m.rescan()
+		}
+		return m, nil
+	case cleanerPlanMsg:
+		if msg.seq != m.scanSeq {
+			return m, nil
+		}
+		m.preview = &msg.plan
+		m.previewErr = msg.err
+		m.scanning = false
+		m.clampScroll()
+		return m, nil
+	case cleanerProgressMsg:
+		m.done, m.total = msg.progress.Done, msg.progress.Total
+		m.activity = append(m.activity, msg.progress.Entry)
+		return m, waitCleanerEvent(msg.events)
+	case cleanerFinishedMsg:
+		return m.finishRun(msg), nil
+	case cleanerLogSavedMsg:
+		if msg.err != nil {
+			return m, common.Notify(common.ToneDanger, "Could not save the log: "+msg.err.Error())
+		}
+		return m, common.Notify(common.ToneSuccess, "Log saved · "+msg.path)
+	case spinner.TickMsg:
+		if m.state != cleanerRunning {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	case tea.KeyMsg:
 		switch m.state {
-		case StateRunning:
-			if key.Matches(msg, common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit) {
-				return m.cancelRunningCleanup(common.IsForceQuit(msg))
+		case cleanerRunning:
+			return m.updateRunning(msg)
+		case cleanerResult:
+			return m.updateResult(msg)
+		default:
+			if m.confirm.Open() {
+				return m.updateConfirm(msg)
 			}
-			return m, batch(cmds...)
-		case StateConfirmingExecute:
-			return m.updateExecuteConfirmation(msg)
-		case StatePromptingMode:
-			return m.updateModePrompt(msg)
-		case StateFinished:
-			return m.updateFinished(msg)
-		case StateSelectingOptions:
-			return m.updateOptions(msg)
+			return m.updateScope(msg)
 		}
-	case tea.MouseMsg:
-		if m.state == StateFinished {
-			if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-				m.logViewer.SetMouseFocused(m.mouseInActivity(msg))
-				return m, nil
-			}
-			if m.logViewer.IsFocusedMouseScrollInput(msg) {
-				var cmd tea.Cmd
-				m.logViewer, cmd = m.logViewer.Update(msg)
-				cmds = append(cmds, cmd)
-			}
-		}
-	}
-
-	return m, batch(cmds...)
-}
-
-func (m CleanerModel) updateOptions(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, common.DefaultKeys.Up):
-		m.optionsList = m.optionsList.MoveUp()
-	case key.Matches(msg, common.DefaultKeys.Down):
-		m.optionsList = m.optionsList.MoveDown()
-	case key.Matches(msg, common.DefaultKeys.Space):
-		return m.toggleFocusedOption()
-	case key.Matches(msg, common.DefaultKeys.Enter):
-		return m.openModePrompt()
 	}
 	return m, nil
 }
 
-func (m CleanerModel) updateFinished(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m CleanerModel) updateScope(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case m.logViewer.IsKeyScrollInput(msg):
-		var cmd tea.Cmd
-		m.logViewer, cmd = m.logViewer.Update(msg)
-		return m, cmd
-	case key.Matches(msg, m.keyMap.ToggleSkipped):
-		m.logViewer.ToggleFolded(logSectionSkipped)
-	case key.Matches(msg, m.keyMap.BackToOptions):
-		m.state = StateSelectingOptions
+	case key.Matches(msg, m.keys.PageUp):
+		m.scrollPreview(-m.previewPage())
+	case key.Matches(msg, m.keys.PageDown):
+		m.scrollPreview(m.previewPage())
+	case key.Matches(msg, m.keys.Left):
+		m.focus = focusScope
+	case key.Matches(msg, m.keys.Right):
+		if m.previewOverflows() {
+			m.focus = focusPreview
+		}
+	case key.Matches(msg, m.keys.ScrollUp):
+		if m.focus == focusPreview {
+			m.scrollPreview(-1)
+		} else {
+			m.cursor = wrapIndex(m.cursor-1, len(cleanerScopeRows))
+		}
+	case key.Matches(msg, m.keys.ScrollDown):
+		if m.focus == focusPreview {
+			m.scrollPreview(1)
+		} else {
+			m.cursor = wrapIndex(m.cursor+1, len(cleanerScopeRows))
+		}
+	case key.Matches(msg, m.keys.Toggle):
+		if m.toggle(cleanerScopeRows[m.cursor].id) {
+			return m.rescan()
+		}
+	case key.Matches(msg, m.keys.Delete):
+		return m.openConfirm()
+	case key.Matches(msg, m.keys.SaveDryRun):
+		return m, saveDryRunLogCmd(m.run, m.options, defaultCleanerLogPath(m.home, time.Now()))
+	case key.Matches(msg, m.keys.Info):
+		if m.stacked() {
+			m.showInfo = !m.showInfo
+		}
 	}
 	return m, nil
 }
 
-func (m CleanerModel) updateExecuteConfirmation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, common.DefaultKeys.Yes):
-		m.options.Execute = true
+func (m CleanerModel) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var result common.ConfirmResult
+	m.confirm, result = m.confirm.Update(msg)
+	switch result {
+	case common.ConfirmAccepted:
 		return m.startRun()
-	case key.Matches(msg, m.keyMap.CancelConfirm):
-		return m.cancelExecuteConfirmation()
-	case key.Matches(msg, common.DefaultKeys.Up, m.keyMap.ConfirmPrev):
-		m.confirmation = executeConfirmationSelection(wrapIndex(int(m.confirmation)-1, int(confirmationCount)))
-	case key.Matches(msg, common.DefaultKeys.Down, m.keyMap.ConfirmNext):
-		m.confirmation = executeConfirmationSelection(wrapIndex(int(m.confirmation)+1, int(confirmationCount)))
-	case key.Matches(msg, common.DefaultKeys.Enter, common.DefaultKeys.Space):
-		if m.confirmation == confirmationRun {
-			m.options.Execute = true
-			return m.startRun()
-		}
-		return m.cancelExecuteConfirmation()
-	case key.Matches(msg, m.keyMap.Run):
-		m.options.Execute = false
-		return m.startRun()
+	case common.ConfirmCanceled:
+		return m, common.Notify(common.ToneWarning, "Canceled; nothing was deleted.")
 	}
 	return m, nil
 }
 
-func (m CleanerModel) cancelExecuteConfirmation() (tea.Model, tea.Cmd) {
-	m.state = StateSelectingOptions
-	m.notice = "Canceled; nothing was deleted."
-	return m, nil
+func (m CleanerModel) updateRunning(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if !key.Matches(msg, m.keys.Cancel, m.keys.CancelQuit) {
+		return m, nil
+	}
+	if m.cancelRun != nil {
+		m.cancelRun()
+	}
+	m.canceling = true
+	return m, common.Notify(common.ToneWarning, cancelingNotice("cleanup", common.IsForceQuit(msg)))
 }
 
-func (m CleanerModel) updateModePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m CleanerModel) updateResult(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, m.keyMap.Run):
-		m.options.Execute = false
-		return m.startRun()
-	case key.Matches(msg, m.keyMap.Execute):
-		m.openExecuteConfirmation()
-	case key.Matches(msg, m.keyMap.CancelPrompt):
-		m.state = StateSelectingOptions
-	case key.Matches(msg, common.DefaultKeys.Up, m.keyMap.ConfirmPrev):
-		m.modeSelection = cleanupModeSelection(wrapIndex(int(m.modeSelection)-1, int(cleanupModeCount)))
-	case key.Matches(msg, common.DefaultKeys.Down, m.keyMap.ConfirmNext):
-		m.modeSelection = cleanupModeSelection(wrapIndex(int(m.modeSelection)+1, int(cleanupModeCount)))
-	case key.Matches(msg, common.DefaultKeys.Enter, common.DefaultKeys.Space):
-		switch m.modeSelection {
-		case cleanupModeDryRun:
-			m.options.Execute = false
-			return m.startRun()
-		case cleanupModeExecute:
-			m.openExecuteConfirmation()
-		case cleanupModeCancel:
-			m.state = StateSelectingOptions
+	case key.Matches(msg, m.keys.ScrollUp):
+		m.resultOffset--
+	case key.Matches(msg, m.keys.ScrollDown):
+		m.resultOffset++
+	case key.Matches(msg, m.keys.PageUp):
+		m.resultOffset -= m.resultPage()
+	case key.Matches(msg, m.keys.PageDown):
+		m.resultOffset += m.resultPage()
+	case key.Matches(msg, m.keys.Back):
+		m.state = cleanerScope
+		m.focus = focusScope
+		m.previewOffset = 0
+		return m.rescan()
+	case key.Matches(msg, m.keys.SaveLog):
+		if m.report != nil {
+			return m, saveReportLogCmd(m.save, defaultCleanerLogPath(m.home, time.Now()), *m.report)
 		}
 	}
+	m.clampScroll()
 	return m, nil
 }
 
-func (m *CleanerModel) openExecuteConfirmation() {
-	m.state = StateConfirmingExecute
-	m.confirmation = confirmationCancel
-	m.err = nil
+func (m *CleanerModel) toggle(id cleaner.GroupID) bool {
+	switch id {
+	case cleaner.GroupSSHKeys:
+		m.options.CleanSSHKeys = !m.options.CleanSSHKeys
+	case cleaner.GroupShellHistory:
+		m.options.CleanShellHistory = !m.options.CleanShellHistory
+	case cleaner.GroupBrowserProfiles:
+		m.options.IncludeBrowserProfiles = !m.options.IncludeBrowserProfiles
+	case cleaner.GroupFullToolReset:
+		m.options.FullToolReset = !m.options.FullToolReset
+	case cleaner.GroupCredentialManager:
+		if !cleaner.GroupAvailable(id) {
+			return false
+		}
+		m.options.CleanCredentialManager = !m.options.CleanCredentialManager
+	case cleaner.GroupForceStop:
+		m.options.ForceStopProcesses = !m.options.ForceStopProcesses
+	default:
+		return false
+	}
+	return true
 }
 
-func (m CleanerModel) openModePrompt() (tea.Model, tea.Cmd) {
-	m.syncOptionsFromList()
-	m.state = StatePromptingMode
-	m.modeSelection = cleanupModeDryRun
-	m.err = nil
-	m.notice = ""
+func (m CleanerModel) rescan() (tea.Model, tea.Cmd) {
+	m.scanSeq++
+	m.scanning = true
+	return m, scanCleanerCmd(m.plan, m.scanSeq, m.options)
+}
+
+func (m CleanerModel) openConfirm() (tea.Model, tea.Cmd) {
+	if m.preview == nil {
+		return m, common.Notify(common.ToneWarning, "Still scanning; try again in a moment.")
+	}
+	files, folders := m.deleteCounts()
+	stops := m.stopCount()
+	if files+folders == 0 && stops == 0 {
+		return m, common.Notify(common.ToneWarning, "Nothing to delete with this scope.")
+	}
+	title := "Delete " + fileFolderPhrase(files, folders, " and ")
+	if files+folders == 0 {
+		title = "Force-stop " + plural(stops, "app", "apps")
+	}
+	m.confirm = common.NewConfirm(title, "Delete", m.confirmLines()...)
 	return m, nil
 }
 
-func (m CleanerModel) toggleFocusedOption() (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-	m.optionsList, cmd = m.optionsList.ToggleSelected()
-	m.syncOptionsFromList()
-	m.notice = ""
-	return m, cmd
-}
-
-func (m *CleanerModel) syncOptionsFromList() {
-	m.options = m.syncedOptions()
-}
-
-func (m CleanerModel) syncedOptions() cleaner.Options {
-	options := m.options
-	options.CleanSSHKeys = m.optionsList.Checked(optionSSHKeys)
-	options.IncludeBrowserProfiles = m.optionsList.Checked(optionBrowserProfiles)
-	options.CleanCredentialManager = m.optionsList.Checked(optionCredentialManager)
-	options.ForceStopProcesses = m.optionsList.Checked(optionForceStop)
-	options.CleanShellHistory = m.optionsList.Checked(optionShellHistory)
-	options.FullToolReset = m.optionsList.Checked(optionFullToolReset)
-	return options
+func (m CleanerModel) confirmLines() []string {
+	var lines []string
+	for _, row := range cleanerScopeRows {
+		if !m.rowEnabled(row) {
+			continue
+		}
+		group := m.preview.Group(row.id)
+		found := group.Found()
+		if found == 0 {
+			continue
+		}
+		extra := ""
+		switch {
+		case row.id == cleaner.GroupForceStop:
+			extra = strings.Join(group.Processes, ", ")
+		case row.destructive:
+			extra = common.ToneDanger.Style().Render("not undoable")
+		}
+		lines = append(lines, strings.TrimRight(fmt.Sprintf("%-24s %4d   %s", row.name, found, extra), " "))
+	}
+	return append(lines, "", fmt.Sprintf("Only inside %s. Never through a link that leaves it. No elevation.", m.home))
 }
 
 func (m CleanerModel) startRun() (tea.Model, tea.Cmd) {
-	m.state = StateRunning
+	m.state = cleanerRunning
+	m.canceling = false
 	m.report = nil
-	m.err = nil
+	m.runErr = nil
 	m.canceled = false
-	m.notice = ""
-	m.options = m.syncedOptions()
+	m.done, m.total = 0, 0
+	m.activity = nil
 	m.startedAt = time.Now()
+	m.elapsed = 0
 
 	options := m.options
+	options.Execute = true
+	options.LogPath = ""
 	ctx, cancel := context.WithTimeout(context.Background(), cleanerRunTimeout)
-	m.cancelCleanup = cancel
-	return m, batch(m.spinner.Tick, runCleaner(ctx, m.run, options))
+	m.cancelRun = cancel
+	return m, batch(m.spinner.Tick, runCleanerCmd(ctx, m.run, options))
 }
 
-func (m CleanerModel) cancelRunningCleanup(quitAfter bool) (tea.Model, tea.Cmd) {
-	if m.cancelCleanup != nil {
-		m.cancelCleanup()
-		m.cancelCleanup = nil
+func (m CleanerModel) finishRun(msg cleanerFinishedMsg) CleanerModel {
+	if m.cancelRun != nil {
+		m.cancelRun()
+		m.cancelRun = nil
 	}
-	m.notice = cancelingNotice("cleanup", quitAfter)
-	return m, nil
+	m.state = cleanerResult
+	m.canceling = false
+	m.report = &msg.report
+	m.runErr = msg.err
+	m.canceled = msg.canceled
+	m.elapsed = time.Since(m.startedAt)
+	m.resultOffset = 0
+	return m
 }
 
 func (m CleanerModel) Running() bool {
-	return m.state == StateRunning
+	return m.state == cleanerRunning
 }
 
 func (m CleanerModel) OwnsKeys() bool {
-	return m.Running() || m.state == StatePromptingMode || m.state == StateConfirmingExecute
+	return m.Running() || m.confirm.Open()
 }
 
-func (m CleanerModel) Breadcrumb() []string {
-	if m.width > 0 && m.width < cleanerShortTitleMaxWidth {
-		return []string{cleanerShortTitle}
+func (m CleanerModel) Modal() string {
+	if !m.confirm.Open() {
+		return ""
 	}
-	return []string{cleanerTitle}
+	width, height := m.bodySize()
+	return m.confirm.View(width, height)
 }
 
 func (m CleanerModel) FooterKeys() help.KeyMap {
-	return cleanerContextualKeyMap{
-		cleanerKeyMap:  m.keyMap,
-		state:          m.state,
-		canFoldSkipped: m.report != nil && notPresentCount(*m.report) > 0,
+	switch {
+	case m.confirm.Open():
+		return m.confirm.Keys()
+	case m.state == cleanerRunning:
+		return common.KeyList{m.keys.Cancel, m.keys.CancelQuit}
+	case m.state == cleanerResult:
+		return common.KeyList{m.keys.Scroll, m.keys.Back, m.keys.SaveLog}
+	case m.focus == focusPreview:
+		return common.KeyList{m.keys.Scroll, m.keys.ToScope, m.keys.Page, m.keys.Delete, m.keys.SaveDryRun}
 	}
+	keys := common.KeyList{m.keys.Toggle, m.keys.Delete, m.keys.SaveDryRun}
+	if m.previewOverflows() {
+		keys = append(keys, m.keys.ToPreview, m.keys.Page)
+	}
+	if m.stacked() {
+		keys = append(keys, m.keys.Info)
+	}
+	return keys
 }
 
 func (m CleanerModel) FooterStatus() string {
 	switch m.state {
-	case StateSelectingOptions:
-		return fmt.Sprintf("%d/%d checked", m.checkedCount(), m.optionsList.Len())
-	case StatePromptingMode:
-		switch m.modeSelection {
-		case cleanupModeDryRun:
-			return modePill(false)
-		case cleanupModeExecute:
-			return modePill(true)
+	case cleanerRunning:
+		if m.canceling {
+			return common.Pill("Canceling…", common.ToneWarning)
 		}
-		return ""
-	case StateConfirmingExecute:
-		return modePill(true)
+		return common.Pill("EXECUTING", common.ToneDanger)
+	case cleanerResult:
+		if m.report == nil {
+			return ""
+		}
+		return fmt.Sprintf("%d deleted", m.report.Deleted)
+	}
+	if m.preview == nil {
+		return "scanning…"
+	}
+	files, folders := m.deleteCounts()
+	return fmt.Sprintf("%d to delete", files+folders)
+}
+
+func (m CleanerModel) View() string {
+	width, height := m.bodySize()
+	switch m.state {
+	case cleanerResult:
+		return common.FitHeight(m.renderResult(width, height), height)
+	case cleanerRunning:
+		return common.FitHeight(m.renderPanes(width, height, m.renderProgress), height)
 	default:
-		return modePill(m.options.Execute)
+		return common.FitHeight(m.renderPanes(width, height, m.renderPreview), height)
 	}
-}
-
-func modePill(execute bool) string {
-	if execute {
-		return common.Pill("EXECUTE", common.ToneDanger)
-	}
-	return common.Pill("DRY-RUN", common.ToneAccent)
-}
-
-func (m CleanerModel) checkedCount() int {
-	count := 0
-	for _, option := range cleanerOptionSummaries() {
-		if m.optionsList.Checked(option.id) {
-			count++
-		}
-	}
-	return count
 }
 
 func (m CleanerModel) bodySize() (int, int) {
 	width, height := m.width, m.height
 	if width <= 0 {
-		width = common.DefaultContentWidth
+		width = common.DefaultContentWidth - 2*common.MarginX
 	}
 	if height <= 0 {
 		height = cleanerDefaultBodyHeight
@@ -554,350 +513,588 @@ func (m CleanerModel) bodySize() (int, int) {
 	return width, height
 }
 
-func (m CleanerModel) View() string {
-	width, height := m.bodySize()
-	notice := m.renderNotice(width)
-	contentHeight := height - lipgloss.Height(notice)
-	if notice == "" {
-		contentHeight = height
-	}
-
-	var content string
-	switch m.state {
-	case StateRunning:
-		content = m.renderRunning(width)
-	case StateFinished:
-		content = m.renderResult(width)
-	default:
-		content = m.renderOptionsFitted(width, contentHeight)
-	}
-
-	if notice == "" {
-		return common.FitHeight(content, height)
-	}
-	return common.FitHeight(content, contentHeight) + "\n" + notice
+func (m CleanerModel) stacked() bool {
+	width, _ := m.bodySize()
+	return width < common.TwoColumnMinWidth
 }
 
-func (m CleanerModel) renderNotice(width int) string {
-	if m.notice == "" {
-		return ""
-	}
-	return common.Notice(width, common.ToneWarning, m.notice)
-}
+type paneRenderer func(width, height int) string
 
-func (m CleanerModel) renderOptionsFitted(width, height int) string {
-	var body string
-	for fit := fitFull; fit <= fitDialogOnly; fit++ {
-		if fit == fitDialogOnly && m.state == StateSelectingOptions {
-			break
-		}
-		body = m.renderOptions(width, height, fit)
-		if lipgloss.Height(body) <= height {
-			return body
-		}
-	}
-	return body
-}
-
-func (m CleanerModel) renderOptions(width, height int, fit optionsFit) string {
-	var blocks []string
-	if fit < fitWithoutSubtitle {
-		blocks = append(blocks, common.RenderWrapped(width, cleanerSubtitle, common.Muted.Render), "")
+func (m CleanerModel) renderPanes(width, height int, right paneRenderer) string {
+	running := m.state == cleanerRunning
+	if !m.stacked() {
+		left := common.MinInt(cleanerScopeWidth, width/2)
+		scope := m.renderScope(left, height, !running)
+		return lipgloss.JoinHorizontal(lipgloss.Top, scope, " ", right(width-left-1, height))
 	}
 
-	if columns := common.SplitColumns(width); columns.TwoColumns && fit < fitDialogOnly {
-		rightWidth := columns.Right
-		left := m.renderOptionsPanel(columns.Left, 0)
-		right := []string{m.renderActionPanel(rightWidth, fit)}
-		if fit < fitWithoutNotes {
-			right = append(right, common.Panel{Title: "Always", Width: rightWidth}.Render(m.renderNotes(rightWidth-4)))
-		}
-		blocks = append(blocks, lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", common.ColumnGap), lipgloss.JoinVertical(lipgloss.Left, right...)))
-		return strings.Join(blocks, "\n")
+	scopeHeight := common.MinInt(len(cleanerScopeRows)+2, height)
+	blocks := []string{m.renderScope(width, scopeHeight, false)}
+	used := scopeHeight
+	if m.showInfo && !running {
+		info := m.renderInfo(width)
+		blocks = append(blocks, info)
+		used += lipgloss.Height(info)
 	}
-
-	action := m.renderActionPanel(width, fit)
-	if fit < fitDialogOnly {
-		listHeight := 0
-		if fit >= fitScrollList {
-			used := lipgloss.Height(strings.Join(blocks, "\n")) + lipgloss.Height(action)
-			if len(blocks) == 0 {
-				used = lipgloss.Height(action)
-			}
-			listHeight = common.MaxInt(1, height-used-2)
-		}
-		blocks = append(blocks, m.renderOptionsPanel(width, listHeight))
-	}
-	blocks = append(blocks, action)
-	if fit < fitWithoutNotes {
-		blocks = append(blocks, m.renderNotes(width))
+	if rest := height - used; rest >= cleanerPaneMinHeight {
+		blocks = append(blocks, right(width, rest))
 	}
 	return strings.Join(blocks, "\n")
 }
 
-func (m CleanerModel) renderOptionsPanel(width, listHeight int) string {
-	variant := common.PanelNormal
-	if m.state == StateSelectingOptions {
-		variant = common.PanelFocused
+func (m CleanerModel) renderScope(width, height int, withDetail bool) string {
+	running := m.state == cleanerRunning
+	panel := common.Panel{Title: "Scope", Width: width, Height: height}
+	if !running && m.focus == focusScope {
+		panel.Variant = common.PanelFocused
 	}
-	panel := common.Panel{
-		Title:   "Options",
-		Meta:    fmt.Sprintf("%d/%d", m.checkedCount(), m.optionsList.Len()),
-		Variant: variant,
-		Width:   width,
-	}
-	list := m.optionsList
-	if listHeight <= 0 {
-		listHeight = list.Len()
-	}
-	list.SetSize(panel.InnerWidth(), listHeight)
-	list.SetFocused(m.state == StateSelectingOptions)
-	return panel.Render(list.View())
-}
-
-func (m CleanerModel) renderActionPanel(width int, fit optionsFit) string {
-	switch m.state {
-	case StatePromptingMode:
-		return m.renderModePanel(width)
-	case StateConfirmingExecute:
-		return m.renderExecuteConfirmation(width)
-	default:
-		return m.renderDetailPanel(width, fit >= fitShortDetails)
-	}
-}
-
-func (m CleanerModel) renderDetailPanel(width int, short bool) string {
-	selected := m.optionsList.Selected()
-	panel := common.Panel{Title: selected.Label, Width: width}
-	var lines []string
-	for _, detail := range selected.Details {
-		lines = append(lines, common.WrapPlain(detail, panel.InnerWidth())...)
-	}
-	if short && len(lines) > cleanerShortDetailLines {
-		lines = lines[:cleanerShortDetailLines]
-		lines[cleanerShortDetailLines-1] = common.Truncate(lines[cleanerShortDetailLines-1]+"…", panel.InnerWidth())
-	}
-	return panel.Render(strings.Join(lines, "\n"))
-}
-
-func (m CleanerModel) renderModePanel(width int) string {
-	panel := common.Panel{Title: "Run cleanup", Variant: common.PanelFocused, Width: width}
 	inner := panel.InnerWidth()
-	lines := []string{
-		common.RenderPlainWrapped(inner, "Choose cleanup mode for the selected options."),
-		common.RenderPlainWrapped(inner, "Selected: "+m.selectedSummary()),
+	room := common.MaxInt(0, height-2)
+
+	start := 0
+	if room < len(cleanerScopeRows) {
+		start = common.MinInt(common.MaxInt(0, m.cursor-room+1), len(cleanerScopeRows)-room)
 	}
-	if m.optionsList.Checked(optionForceStop) {
-		lines = append(lines, common.Notice(inner, common.ToneWarning, "Force stop is on: running browsers and IDEs are stopped in dry-run too."))
+	var rows []string
+	for i := start; i < len(cleanerScopeRows) && len(rows) < room; i++ {
+		rows = append(rows, m.renderScopeRow(i, inner, running))
 	}
-	lines = append(lines,
-		"",
-		common.RenderChoices(inner, []common.Choice{
-			{Label: "Dry-run", Detail: "only list what would be deleted"},
-			{Label: "Execute", Detail: "delete matching files (asks again)"},
-			{Label: "Cancel", Detail: "back to options"},
-		}, int(m.modeSelection)),
-	)
+
+	var detail []string
+	if withDetail {
+		detail = m.detailLines(inner)
+	}
+	if len(detail) == 0 || len(rows)+1+len(detail) > room {
+		return panel.Render(strings.Join(rows, "\n"))
+	}
+	for len(rows)+1+len(detail) < room {
+		rows = append(rows, "")
+	}
+	separatorRow := len(rows) + 1
+	rendered := strings.Split(panel.Render(strings.Join(append(append(rows, ""), detail...), "\n")), "\n")
+	borderStyle := common.Muted
+	if panel.Variant == common.PanelFocused {
+		borderStyle = common.Accent
+	}
+	rendered[separatorRow] = borderStyle.Render("├" + strings.Repeat("─", common.MaxInt(0, width-2)) + "┤")
+	return strings.Join(rendered, "\n")
+}
+
+func (m CleanerModel) renderScopeRow(index, width int, dimmed bool) string {
+	row := cleanerScopeRows[index]
+	enabled := m.rowEnabled(row)
+	focused := index == m.cursor && !dimmed && m.focus == focusScope
+
+	cursor := " "
+	if focused {
+		cursor = "▸"
+	}
+	glyph := "[ ]"
+	switch {
+	case row.id == cleaner.GroupCredentials:
+		glyph = "●  "
+	case enabled:
+		glyph = "[x]"
+	}
+	name := row.name
+	count := m.rowCount(row)
+
+	if dimmed || !cleaner.GroupAvailable(row.id) {
+		return common.Muted.Render(common.SpreadLine(width, cursor+glyph+" "+name, count))
+	}
+	if focused {
+		name = common.Selected.Render(name)
+	}
+	countStyle := common.Muted
+	switch {
+	case enabled && row.destructive:
+		countStyle = common.ToneDanger.Style()
+	case enabled:
+		countStyle = lipgloss.NewStyle()
+	}
+	return common.SpreadLine(width, cursor+glyph+" "+name, countStyle.Render(count))
+}
+
+func (m CleanerModel) rowCount(row scopeRow) string {
+	if !cleaner.GroupAvailable(row.id) {
+		return "n/a"
+	}
+	if m.preview == nil {
+		return "…"
+	}
+	group := m.preview.Group(row.id)
+	if row.id == cleaner.GroupForceStop {
+		return fmt.Sprintf("%d running", group.Found())
+	}
+	return fmt.Sprintf("%d found", group.Found())
+}
+
+func (m CleanerModel) rowEnabled(row scopeRow) bool {
+	return cleaner.GroupAvailable(row.id) && m.options.Enabled(row.id)
+}
+
+func (m CleanerModel) detailLines(width int) []string {
+	row := cleanerScopeRows[m.cursor]
+	lines := []string{lipgloss.NewStyle().Bold(true).Render(row.name)}
+	lines = append(lines, common.WrapPlain(row.help, width)...)
+	if row.notUndoable {
+		lines = append(lines, "Not undoable.")
+	}
+	return lines
+}
+
+func (m CleanerModel) renderInfo(width int) string {
+	panel := common.Panel{Title: cleanerScopeRows[m.cursor].name, Width: width}
+	lines := m.detailLines(panel.InnerWidth())
+	return panel.Render(strings.Join(lines[1:], "\n"))
+}
+
+func (m CleanerModel) renderPreview(width, height int) string {
+	panel := common.Panel{Title: m.previewTitle(), Width: width, Height: height}
+	if m.focus == focusPreview {
+		panel.Variant = common.PanelFocused
+	}
+	if m.preview == nil {
+		return panel.Render(common.Muted.Render("Scanning your profile…"))
+	}
+	lines := m.previewLines(panel.InnerWidth())
+	room := common.MaxInt(1, height-2)
+	offset := common.MinInt(m.previewOffset, common.MaxInt(0, len(lines)-room))
+	if len(lines) > room {
+		panel.Meta = scrollPosition(offset, room, len(lines))
+		lines = lines[offset : offset+room]
+	}
+	if m.scanning {
+		panel.Meta = "scanning…"
+	}
 	return panel.Render(strings.Join(lines, "\n"))
 }
 
-func (m CleanerModel) renderExecuteConfirmation(width int) string {
-	lines := []string{"Execute mode will delete matching local files. Choose an option and press enter."}
-	for _, item := range m.executeItems() {
-		lines = append(lines, "• "+item)
+func (m CleanerModel) previewTitle() string {
+	if m.preview == nil {
+		return "Will delete"
 	}
-	lines = append(lines, cleanerSafetyNotice, "Not undoable. Run a dry-run first to see the exact list.")
-	return common.ConfirmDialog(width, "Delete files", lines, []string{"Cancel", "Run execute cleanup"}, int(m.confirmation))
+	files, folders := m.deleteCounts()
+	if files+folders == 0 {
+		return "Will delete · nothing"
+	}
+	return "Will delete · " + fileFolderPhrase(files, folders, " · ")
 }
 
-func (m CleanerModel) executeItems() []string {
-	items := []string{"Baseline credential and token files"}
-	for _, option := range cleanerOptionSummaries() {
-		if m.optionsList.Checked(option.id) {
-			items = append(items, option.summary)
+func (m CleanerModel) previewLines(width int) []string {
+	var lines []string
+	if m.previewErr != nil {
+		lines = append(lines, common.Notice(width, common.ToneWarning, "Scan incomplete: "+m.previewErr.Error()), "")
+	}
+
+	if m.options.ForceStopProcesses {
+		if processes := m.preview.Group(cleaner.GroupForceStop).Processes; len(processes) > 0 {
+			lines = append(lines, common.ToneDanger.Style().Bold(true).Render(fmt.Sprintf("WILL FORCE-STOP · %d", len(processes))))
+			for _, name := range processes {
+				lines = append(lines, "  "+name)
+			}
+			lines = append(lines, "")
 		}
 	}
-	return items
+
+	var refused []cleaner.PlanEntry
+	for _, row := range cleanerScopeRows {
+		if row.id == cleaner.GroupForceStop || !m.rowEnabled(row) {
+			continue
+		}
+		var entries []string
+		for _, entry := range m.preview.Group(row.id).Entries {
+			if entry.Refused != "" {
+				refused = append(refused, entry)
+				continue
+			}
+			entries = append(entries, m.previewEntry(entry, width))
+		}
+		if len(entries) == 0 {
+			continue
+		}
+		lines = append(lines, common.Muted.Bold(true).Render(strings.ToUpper(row.name)))
+		lines = append(append(lines, entries...), "")
+	}
+
+	if len(refused) > 0 {
+		lines = append(lines, common.ToneWarning.Style().Bold(true).Render(fmt.Sprintf("⚠ %d refused", len(refused))))
+		for _, entry := range refused {
+			path := displayPath(m.home, entry.Path)
+			if entry.LinkTarget != "" {
+				path += " → " + displayPath(m.home, entry.LinkTarget)
+			}
+			lines = append(lines, common.SpreadLine(width, "  "+path, common.Muted.Render(entry.Refused)))
+		}
+		lines = append(lines, "")
+	}
+
+	if len(lines) == 0 {
+		return []string{common.Muted.Render("Nothing to delete with this scope.")}
+	}
+	return lines[:len(lines)-1]
 }
 
-func (m CleanerModel) selectedSummary() string {
-	var selected []string
-	for _, option := range cleanerOptionSummaries() {
-		if m.optionsList.Checked(option.id) {
-			selected = append(selected, strings.ToLower(option.summary[:1])+option.summary[1:])
+func (m CleanerModel) previewEntry(entry cleaner.PlanEntry, width int) string {
+	path := displayPath(m.home, entry.Path)
+	tag := ""
+	switch {
+	case entry.LinkTarget != "":
+		tag = "link only"
+		path += " → " + displayPath(m.home, entry.LinkTarget)
+	case entry.IsDir:
+		tag = "folder"
+		path += string(filepath.Separator)
+	}
+	return common.SpreadLine(width, "  "+path, common.Muted.Render(tag))
+}
+
+func (m CleanerModel) deleteCounts() (int, int) {
+	if m.preview == nil {
+		return 0, 0
+	}
+	files, folders := 0, 0
+	for _, row := range cleanerScopeRows {
+		if row.id == cleaner.GroupForceStop || !m.rowEnabled(row) {
+			continue
+		}
+		for _, entry := range m.preview.Group(row.id).Entries {
+			switch {
+			case entry.Refused != "":
+			case entry.IsDir:
+				folders++
+			default:
+				files++
+			}
 		}
 	}
-	if len(selected) == 0 {
-		return "baseline only"
-	}
-	return "baseline, " + strings.Join(selected, ", ")
+	return files, folders
 }
 
-func (m CleanerModel) renderNotes(width int) string {
-	return common.RenderWrapped(width, cleanerBaselineNote+" "+cleanerSafetyNotice, common.Muted.Render)
-}
-
-func (m CleanerModel) renderRunning(width int) string {
-	label := "Running dry-run cleanup…"
-	note := "Dry-run only lists deletions; nothing is deleted."
-	if m.options.Execute {
-		label = "Running execute cleanup…"
-		note = "Execute deletes matching files inside your user profile."
-	}
-	return common.RunStatus(width, m.spinner.View(), label, note, m.elapsed())
-}
-
-func (m CleanerModel) elapsed() time.Duration {
-	if m.startedAt.IsZero() {
+func (m CleanerModel) stopCount() int {
+	if m.preview == nil || !m.options.ForceStopProcesses {
 		return 0
 	}
-	return time.Since(m.startedAt)
+	return len(m.preview.Group(cleaner.GroupForceStop).Processes)
 }
 
-func (m CleanerModel) renderResult(width int) string {
-	header := m.renderResultHeader(width)
-	panel := common.Panel{Title: "Activity", Meta: m.logViewer.Position(), Width: width}
-	if !m.logViewer.HasContent() {
-		return header + "\n" + panel.Render(common.Muted.Italic(true).Render("No activity"))
+func (m CleanerModel) previewRoom() int {
+	width, height := m.bodySize()
+	if !m.stacked() {
+		return common.MaxInt(1, height-2)
 	}
-	panel.Height = common.MinInt(m.logViewer.Height(), m.logViewer.TotalLines()) + 2
-	return header + "\n" + panel.Render(m.logViewer.View())
+	used := common.MinInt(len(cleanerScopeRows)+2, height)
+	if m.showInfo {
+		used += lipgloss.Height(m.renderInfo(width))
+	}
+	return common.MaxInt(1, height-used-2)
 }
 
-func (m CleanerModel) renderResultHeader(width int) string {
+func (m CleanerModel) previewLineCount() int {
+	if m.preview == nil {
+		return 0
+	}
+	width, _ := m.bodySize()
+	if !m.stacked() {
+		width -= common.MinInt(cleanerScopeWidth, width/2) + 1
+	}
+	return len(m.previewLines(common.MaxInt(1, width-4)))
+}
+
+func (m CleanerModel) previewOverflows() bool {
+	return m.previewLineCount() > m.previewRoom()
+}
+
+func (m CleanerModel) previewPage() int {
+	return common.MaxInt(1, m.previewRoom()-1)
+}
+
+func (m *CleanerModel) scrollPreview(delta int) {
+	m.previewOffset += delta
+	m.clampScroll()
+}
+
+func (m *CleanerModel) clampScroll() {
+	m.previewOffset = common.MaxInt(0, common.MinInt(m.previewOffset, m.previewLineCount()-m.previewRoom()))
+	if !m.previewOverflows() {
+		m.focus = focusScope
+	}
+	m.resultOffset = common.MaxInt(0, common.MinInt(m.resultOffset, len(m.resultLines(m.resultWidth()))-m.resultPage()))
+}
+
+func (m CleanerModel) renderProgress(width, height int) string {
+	panel := common.Panel{Title: "Deleting", Variant: common.PanelFocused, Width: width, Height: height}
+	inner := panel.InnerWidth()
+	status := fmt.Sprintf("  %d/%d · %s %s", m.done, m.total, formatTenths(time.Since(m.startedAt)), m.spinner.View())
+	barWidth := common.MaxInt(cleanerBarMinWidth, inner-lipgloss.Width(status))
+	lines := []string{progressBar(m.done, m.total, barWidth) + status}
+
+	room := common.MaxInt(0, height-3)
+	activity := m.activity
+	if len(activity) > room {
+		activity = activity[len(activity)-room:]
+	}
+	for _, entry := range activity {
+		lines = append(lines, m.activityLine(entry, inner))
+	}
+	return panel.Render(strings.Join(lines, "\n"))
+}
+
+func (m CleanerModel) activityLine(entry cleaner.Entry, width int) string {
+	switch entry.Level {
+	case cleaner.LevelError:
+		return common.Truncate(common.ToneDanger.Style().Render("✗ ")+m.entryLabel(entry)+"   "+common.Muted.Render(m.failureDetail(entry)), width)
+	case cleaner.LevelDelete, cleaner.LevelWarn:
+		return common.Truncate(common.ToneSuccess.Style().Render("✓ ")+m.entryLabel(entry), width)
+	default:
+		return common.Truncate(common.Muted.Render("· "+m.entryLabel(entry)+"   skipped"), width)
+	}
+}
+
+func (m CleanerModel) entryLabel(entry cleaner.Entry) string {
+	if entry.Path == "" {
+		return entry.Message
+	}
+	label := displayPath(m.home, entry.Path)
+	if entry.LinkTarget != "" {
+		label += " → " + displayPath(m.home, entry.LinkTarget) + " kept"
+	}
+	return label
+}
+
+func (m CleanerModel) failureDetail(entry cleaner.Entry) string {
+	detail := entry.Message
+	if entry.Path != "" {
+		if _, rest, ok := strings.Cut(detail, entry.Path+": "); ok {
+			detail = rest
+		}
+	}
+	if m.home != "" {
+		detail = strings.ReplaceAll(detail, m.home, "~")
+	}
+	return detail
+}
+
+type resultLine struct {
+	text   string
+	detail string
+	style  lipgloss.Style
+}
+
+func (m CleanerModel) resultWidth() int {
+	width, _ := m.bodySize()
+	return common.MaxInt(1, width-4)
+}
+
+func (m CleanerModel) resultPage() int {
+	_, height := m.bodySize()
+	return common.MaxInt(1, height-2)
+}
+
+func (m CleanerModel) renderResult(width, height int) string {
+	panel := common.Panel{Title: m.resultTitle(), Variant: common.PanelFocused, Width: width, Height: height}
+	lines := m.resultLines(panel.InnerWidth())
+	room := common.MaxInt(1, height-2)
+	offset := common.MinInt(m.resultOffset, common.MaxInt(0, len(lines)-room))
+	if len(lines) > room {
+		panel.Meta = scrollPosition(offset, room, len(lines))
+		lines = lines[offset : offset+room]
+	}
+	return panel.Render(strings.Join(lines, "\n"))
+}
+
+func (m CleanerModel) resultTitle() string {
 	if m.report == nil {
 		return ""
 	}
-	report := *m.report
-	lines := []string{m.renderResultSummary(width), common.RenderCounts(width, cleanerCounts(report, m.options.Execute))}
-	if report.LogPath != "" {
-		lines = append(lines, strings.Join(common.WrapLine("log ", displayPath(m.home, report.LogPath), width), "\n"))
+	chips := []string{fmt.Sprintf("✓ Deleted %d", m.report.Deleted)}
+	if m.canceled {
+		chips = append([]string{"⚠ Canceled"}, chips...)
 	}
-	return strings.Join(lines, "\n")
+	if failed := len(m.failures()); failed > 0 {
+		chips = append(chips, fmt.Sprintf("✗ %d failed", failed))
+	}
+	chips = append(chips, formatTenths(m.elapsed))
+	return strings.Join(chips, " · ")
 }
 
-func (m CleanerModel) renderResultSummary(width int) string {
-	switch {
-	case m.canceled:
-		return common.Notice(width, common.ToneWarning, "Canceled. The run stopped early; the activity below shows what it did before it stopped.")
-	case m.err != nil:
-		return common.Notice(width, common.ToneDanger, "Completed with errors · see ERRORS below")
-	case m.options.Execute:
-		return common.Notice(width, common.ToneSuccess, fmt.Sprintf("Execute finished · %d deleted", m.report.Deleted))
-	default:
-		return common.Notice(width, common.ToneSuccess, "Dry-run finished · nothing was deleted")
-	}
-}
-
-func (m *CleanerModel) layoutComponents() {
-	width, height := m.bodySize()
-	inner := common.MaxInt(1, width-4)
-	activityHeight := height - 2 - lipgloss.Height(m.renderResultHeader(width))
-	if m.notice != "" {
-		activityHeight -= lipgloss.Height(m.renderNotice(width))
-	}
-	m.logViewer.SetSize(inner, common.MaxInt(cleanerActivityMinHeight, activityHeight))
-}
-
-func (m CleanerModel) mouseInActivity(msg tea.MouseMsg) bool {
+func (m CleanerModel) failures() []resultLine {
 	if m.report == nil {
-		return false
-	}
-	width, _ := m.bodySize()
-	top := lipgloss.Height(m.renderResultHeader(width))
-	bottom := top + m.logViewer.Height() + 1
-	return msg.Y >= top && msg.Y <= bottom
-}
-
-func cleanerCounts(report cleaner.Report, execute bool) []common.Count {
-	removals := common.Count{Label: "would delete", N: report.DryRuns, Tone: common.ToneAccent}
-	if execute {
-		removals = common.Count{Label: "deleted", N: report.Deleted, Tone: common.ToneSuccess}
-	}
-	return []common.Count{
-		removals,
-		{Label: "skipped", N: report.Skipped, Tone: common.ToneSubtle},
-		{Label: "warnings", Singular: "warning", N: report.Warnings, Tone: common.ToneWarning},
-		{Label: "errors", Singular: "error", N: report.Errors, Tone: common.ToneDanger},
-	}
-}
-
-func cleanerUnreportedError(report cleaner.Report, err error, canceled bool) error {
-	if err == nil || canceled || report.Errors > 0 {
 		return nil
 	}
-	return err
+	var failed []resultLine
+	for _, entry := range m.report.Entries {
+		if entry.Level == cleaner.LevelError {
+			failed = append(failed, resultLine{text: m.entryLabel(entry), detail: m.failureDetail(entry)})
+		}
+	}
+	if m.runErr != nil && !m.canceled && len(failed) == 0 {
+		for _, line := range strings.Split(m.runErr.Error(), "\n") {
+			failed = append(failed, resultLine{text: line})
+		}
+	}
+	return failed
 }
 
-func cleanerLogSections(report cleaner.Report, unreported error, execute bool, home string) []common.LogSection {
-	errorsSection := common.LogSection{ID: logSectionErrors, Title: "ERRORS", Tone: common.ToneDanger}
-	warnings := common.LogSection{ID: logSectionWarnings, Title: "WARNINGS", Tone: common.ToneWarning}
-	removals := common.LogSection{ID: logSectionRemovals, Title: "WOULD DELETE", Glyph: "○", Tone: common.ToneAccent}
-	if execute {
-		removals.Title = "DELETED"
-		removals.Glyph = "−"
-		removals.Tone = common.ToneSuccess
+func (m CleanerModel) resultLines(width int) []string {
+	if m.report == nil {
+		return nil
 	}
-	skipped := common.LogSection{ID: logSectionSkipped, Title: "SKIPPED", Glyph: "·", Tone: common.ToneSubtle}
-	notes := common.LogSection{ID: logSectionNotes, Title: "NOTES", Glyph: "i", Tone: common.ToneSubtle}
+	var deleted, stopped, refused []resultLine
+	for _, entry := range m.report.Entries {
+		switch {
+		case entry.Level == cleaner.LevelDelete:
+			deleted = append(deleted, resultLine{text: m.entryLabel(entry)})
+		case entry.Level == cleaner.LevelWarn && strings.HasPrefix(entry.Message, cleanerStoppedPrefix):
+			stopped = append(stopped, resultLine{text: strings.TrimPrefix(entry.Message, cleanerStoppedPrefix)})
+		case entry.Level == cleaner.LevelSkip && entry.Path != "" && !entry.NotPresent:
+			refused = append(refused, resultLine{text: displayPath(m.home, entry.Path), detail: cleaner.RefusedOutsideProfile})
+		}
+	}
 
-	for _, entry := range report.Entries {
-		switch entry.Level {
-		case cleaner.LevelError:
-			errorsSection.Lines = append(errorsSection.Lines, common.LogLine{Tone: common.ToneDanger, Text: entry.Message})
-		case cleaner.LevelWarn:
-			warnings.Lines = append(warnings.Lines, common.LogLine{Tone: common.ToneWarning, Text: entry.Message})
-		case cleaner.LevelDelete, cleaner.LevelDryRun:
-			removals.Lines = append(removals.Lines, removalLine(entry, home))
-		case cleaner.LevelSkip:
-			if entry.NotPresent {
-				skipped.Folded = append(skipped.Folded, common.LogLine{Tone: common.ToneSubtle, Text: entry.Target, Detail: displayPath(home, entry.Path)})
-				continue
+	var lines []string
+	section := func(title string, style lipgloss.Style, items []resultLine) {
+		if len(items) == 0 {
+			return
+		}
+		lines = append(lines, style.Bold(true).Render(fmt.Sprintf("%s · %d", title, len(items))))
+		for _, item := range items {
+			text := item.text
+			if item.detail != "" {
+				text += "   " + item.detail
 			}
-			skipped.Lines = append(skipped.Lines, common.LogLine{Tone: common.ToneSubtle, Text: entry.Message})
-		default:
-			notes.Lines = append(notes.Lines, common.LogLine{Tone: common.ToneSubtle, Text: entry.Message})
-		}
-	}
-	if unreported != nil {
-		for _, line := range strings.Split(unreported.Error(), "\n") {
-			errorsSection.Lines = append(errorsSection.Lines, common.LogLine{Tone: common.ToneDanger, Text: line})
-		}
-	}
-	if len(skipped.Folded) > 0 {
-		skipped.FoldedSummary = fmt.Sprintf("%d not present (s to show)", len(skipped.Folded))
-		if len(skipped.Lines) > 0 {
-			skipped.FoldedSummary += fmt.Sprintf(", %d shown below", len(skipped.Lines))
+			for _, wrapped := range common.WrapLine("  ", text, width) {
+				lines = append(lines, item.style.Render(wrapped))
+			}
 		}
 	}
 
-	var sections []common.LogSection
-	for _, section := range []common.LogSection{errorsSection, warnings, removals, skipped, notes} {
-		if len(section.Lines) > 0 || len(section.Folded) > 0 {
-			sections = append(sections, section)
-		}
+	section("FAILED", common.ToneDanger.Style(), m.failures())
+	if m.canceled {
+		left := common.MaxInt(0, m.total-m.done)
+		section("CANCELED", common.ToneWarning.Style(), []resultLine{{text: fmt.Sprintf("Stopped before finishing · %d of %d not done", left, m.total)}})
 	}
-	return sections
+	section("DELETED", common.ToneSuccess.Style(), deleted)
+	section("STOPPED", common.ToneSuccess.Style(), stopped)
+	section("REFUSED", common.ToneWarning.Style(), refused)
+	if kept := m.keptNames(); kept != "" {
+		lines = append(lines, common.Muted.Bold(true).Render("KEPT"))
+		lines = append(lines, common.WrapLine("  ", kept+" (options off)", width)...)
+	}
+	lines = append(lines, "")
+	return append(lines, common.WrapLine("ⓘ ", cleanerReminder, width)...)
 }
 
-func removalLine(entry cleaner.Entry, home string) common.LogLine {
-	if entry.Target == "" {
-		return common.LogLine{Text: entry.Message}
+func (m CleanerModel) keptNames() string {
+	var names []string
+	for _, row := range cleanerScopeRows {
+		if row.id == cleaner.GroupCredentials || row.id == cleaner.GroupForceStop || !cleaner.GroupAvailable(row.id) || m.options.Enabled(row.id) {
+			continue
+		}
+		names = append(names, row.name)
 	}
-	if entry.LinkTarget != "" {
-		return common.LogLine{Text: entry.Target + " (link only)", Detail: displayPath(home, entry.Path) + " → " + displayPath(home, entry.LinkTarget) + " kept"}
+	if len(names) == 0 {
+		return ""
 	}
-	return common.LogLine{Text: entry.Target, Detail: displayPath(home, entry.Path)}
+	joined := strings.Join(names, ", ")
+	return joined[:1] + strings.ToLower(joined[1:])
 }
 
-func notPresentCount(report cleaner.Report) int {
-	count := 0
-	for _, entry := range report.Entries {
-		if entry.NotPresent {
-			count++
-		}
+func scanCleanerCmd(plan CleanerPlanFunc, seq int, options cleaner.Options) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), cleanerScanTimeout)
+		defer cancel()
+		result, err := plan(ctx, options)
+		return cleanerPlanMsg{seq: seq, plan: result, err: err}
 	}
-	return count
+}
+
+func runCleanerCmd(ctx context.Context, run CleanerRunFunc, options cleaner.Options) tea.Cmd {
+	return func() tea.Msg {
+		events := make(chan tea.Msg, cleanerEventBuffer)
+		options.Progress = func(progress cleaner.Progress) {
+			events <- cleanerProgressMsg{progress: progress, events: events}
+		}
+		go func() {
+			report, err := run(ctx, options)
+			events <- cleanerFinishedMsg{report: report, err: err, canceled: runWasCanceled(ctx, err)}
+		}()
+		return <-events
+	}
+}
+
+func waitCleanerEvent(events <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		return <-events
+	}
+}
+
+func saveDryRunLogCmd(run CleanerRunFunc, options cleaner.Options, path string) tea.Cmd {
+	options.Execute = false
+	options.ForceStopProcesses = false
+	options.Progress = nil
+	options.LogPath = path
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), cleanerRunTimeout)
+		defer cancel()
+		report, err := run(ctx, options)
+		if report.LogPath != "" {
+			path = report.LogPath
+		}
+		if _, statErr := os.Stat(path); statErr == nil {
+			return cleanerLogSavedMsg{path: path}
+		}
+		if err == nil {
+			err = errors.New("the log file was not written")
+		}
+		return cleanerLogSavedMsg{path: path, err: err}
+	}
+}
+
+func saveReportLogCmd(save CleanerSaveFunc, path string, report cleaner.Report) tea.Cmd {
+	return func() tea.Msg {
+		saved, err := save(path, report)
+		return cleanerLogSavedMsg{path: saved, err: err}
+	}
+}
+
+func defaultCleanerLogPath(home string, now time.Time) string {
+	return filepath.Join(home, cleanerLogPrefix+now.Format(cleanerLogTimeLayout)+cleanerLogSuffix)
+}
+
+func progressBar(done, total, width int) string {
+	filled := 0
+	if total > 0 {
+		filled = common.MinInt(width, done*width/total)
+	}
+	return common.Accent.Render(strings.Repeat("█", filled)) + common.Muted.Render(strings.Repeat("░", width-filled))
+}
+
+func formatTenths(elapsed time.Duration) string {
+	tenths := int(elapsed / (100 * time.Millisecond))
+	return fmt.Sprintf("%d:%02d.%d", tenths/600, tenths/10%60, tenths%10)
+}
+
+func scrollPosition(offset, room, total int) string {
+	return fmt.Sprintf("%d-%d/%d", offset+1, common.MinInt(offset+room, total), total)
+}
+
+func fileFolderPhrase(files, folders int, join string) string {
+	var parts []string
+	if files > 0 {
+		parts = append(parts, plural(files, "file", "files"))
+	}
+	if folders > 0 {
+		parts = append(parts, plural(folders, "folder", "folders"))
+	}
+	return strings.Join(parts, join)
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, one)
+	}
+	return fmt.Sprintf("%d %s", n, many)
 }
 
 func displayPath(home, path string) string {
@@ -919,17 +1116,6 @@ func trimmedSpinner(base spinner.Spinner) spinner.Spinner {
 	return spinner.Spinner{Frames: frames, FPS: base.FPS}
 }
 
-func runCleaner(ctx context.Context, run CleanerRunFunc, options cleaner.Options) tea.Cmd {
-	return func() tea.Msg {
-		report, err := run(ctx, options)
-		return cleanerFinishedMsg{
-			report:   report,
-			err:      err,
-			canceled: runWasCanceled(ctx, err),
-		}
-	}
-}
-
 func runWasCanceled(ctx context.Context, err error) bool {
 	return err != nil && errors.Is(ctx.Err(), context.Canceled)
 }
@@ -939,13 +1125,6 @@ func cancelingNotice(subject string, quitAfter bool) string {
 		return "Canceling " + subject + "; UTILS quits when it stops. Press ctrl+c again to quit now and leave the current step unfinished."
 	}
 	return "Canceling " + subject + "..."
-}
-
-func credentialManagerTag() string {
-	if runtime.GOOS != osWindows {
-		return "Windows only"
-	}
-	return ""
 }
 
 func batch(cmds ...tea.Cmd) tea.Cmd {
