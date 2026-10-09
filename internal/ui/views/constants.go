@@ -19,6 +19,8 @@ const (
 
 	cleanerRunTimeout = 5 * time.Minute
 
+	runCanceledText = "Canceled. The run stopped early; the activity above shows what it did before it stopped."
+
 	defaultLogViewportHeight     = 12
 	cleanerOptionsReservedHeight = 10
 	cleanerOptionsMinHeight      = 3

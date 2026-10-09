@@ -2,6 +2,7 @@ package views
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"strings"
@@ -52,7 +53,6 @@ type cleanerKeyMap struct {
 	Execute     key.Binding
 	ConfirmPrev key.Binding
 	ConfirmNext key.Binding
-	CancelRun   key.Binding
 	BackToMenu  key.Binding
 }
 
@@ -61,7 +61,10 @@ type cleanerContextualKeyMap struct {
 	state ViewState
 }
 
+type CleanerRunFunc func(context.Context, cleaner.Options) (cleaner.Report, error)
+
 type CleanerModel struct {
+	run           CleanerRunFunc
 	spinner       spinner.Model
 	help          help.Model
 	keyMap        cleanerKeyMap
@@ -70,6 +73,7 @@ type CleanerModel struct {
 	options       cleaner.Options
 	report        *cleaner.Report
 	err           error
+	canceled      bool
 	cancelCleanup context.CancelFunc
 	notice        string
 	layout        common.Layout
@@ -85,8 +89,9 @@ type LogViewerModel struct {
 }
 
 type cleanerFinishedMsg struct {
-	report cleaner.Report
-	err    error
+	report   cleaner.Report
+	err      error
+	canceled bool
 }
 
 var _ tea.Model = CleanerModel{}
@@ -125,10 +130,6 @@ func newCleanerKeyMap() cleanerKeyMap {
 			key.WithKeys("right", "l"),
 			key.WithHelp("right/l", "next"),
 		),
-		CancelRun: key.NewBinding(
-			key.WithKeys("esc", "ctrl+c"),
-			key.WithHelp("esc/ctrl+c", "cancel"),
-		),
 		BackToMenu: key.NewBinding(
 			key.WithKeys("q", "esc"),
 			key.WithHelp("q/esc", "main menu"),
@@ -146,7 +147,7 @@ func (k cleanerKeyMap) contextual(state ViewState) cleanerContextualKeyMap {
 func (k cleanerContextualKeyMap) ShortHelp() []key.Binding {
 	switch k.state {
 	case StateRunning:
-		return []key.Binding{k.CancelRun}
+		return []key.Binding{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit}
 	case StateConfirmingExecute:
 		return []key.Binding{k.Move, k.Select, common.DefaultKeys.Yes, common.DefaultKeys.No}
 	case StatePromptingMode:
@@ -160,7 +161,7 @@ func (k cleanerContextualKeyMap) FullHelp() [][]key.Binding {
 	switch k.state {
 	case StateRunning:
 		return [][]key.Binding{
-			{k.CancelRun},
+			{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit},
 		}
 	case StateConfirmingExecute:
 		return [][]key.Binding{
@@ -180,10 +181,15 @@ func (k cleanerContextualKeyMap) FullHelp() [][]key.Binding {
 }
 
 func NewCleanerModel() CleanerModel {
+	return NewCleanerModelWithRunner(cleaner.Run)
+}
+
+func NewCleanerModelWithRunner(run CleanerRunFunc) CleanerModel {
 	optionsList := newCleanerOptionsList()
 	optionsList.SetFocused(false)
 
 	return CleanerModel{
+		run: run,
 		spinner: spinner.New(
 			spinner.WithSpinner(spinner.Dot),
 			spinner.WithStyle(common.Accent),
@@ -305,6 +311,7 @@ func (m CleanerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = StateFinished
 		m.report = &msg.report
 		m.err = msg.err
+		m.canceled = msg.canceled
 		m.notice = ""
 		m.logViewer.SetMouseFocused(false)
 		m.logViewer.SetReport(msg.report)
@@ -313,8 +320,8 @@ func (m CleanerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch m.state {
 		case StateRunning:
-			if key.Matches(msg, m.keyMap.CancelRun) {
-				return m.cancelRunningCleanup()
+			if key.Matches(msg, common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit) {
+				return m.cancelRunningCleanup(common.IsForceQuit(msg))
 			}
 			return m, batch(cmds...)
 		case StateConfirmingExecute:
@@ -425,7 +432,11 @@ func (m CleanerModel) View() string {
 		b.WriteString(m.logViewer.View())
 	}
 
-	if m.err != nil {
+	if m.canceled {
+		b.WriteString("\n")
+		b.WriteString(layout.RenderWrapped(runCanceledText, common.Warning.Render))
+		b.WriteString("\n")
+	} else if m.err != nil {
 		b.WriteString("\n")
 		b.WriteString(layout.RenderWrapped("Completed with errors: "+m.err.Error(), common.Error.Render))
 		b.WriteString("\n")
@@ -586,22 +597,31 @@ func (m CleanerModel) startRun() (tea.Model, tea.Cmd) {
 	m.state = StateRunning
 	m.report = nil
 	m.err = nil
+	m.canceled = false
 	m.notice = ""
 	m.options = m.syncedOptions()
 
 	options := m.options
 	ctx, cancel := context.WithTimeout(context.Background(), cleanerRunTimeout)
 	m.cancelCleanup = cancel
-	return m, batch(m.spinner.Tick, runCleaner(ctx, options))
+	return m, batch(m.spinner.Tick, runCleaner(ctx, m.run, options))
 }
 
-func (m CleanerModel) cancelRunningCleanup() (tea.Model, tea.Cmd) {
+func (m CleanerModel) cancelRunningCleanup(quitAfter bool) (tea.Model, tea.Cmd) {
 	if m.cancelCleanup != nil {
 		m.cancelCleanup()
 		m.cancelCleanup = nil
 	}
-	m.notice = "Canceling cleanup..."
+	m.notice = cancelingNotice("cleanup", quitAfter)
 	return m, nil
+}
+
+func (m CleanerModel) Running() bool {
+	return m.state == StateRunning
+}
+
+func (m CleanerModel) OwnsKeys() bool {
+	return m.Running()
 }
 
 func (m *LogViewerModel) SetSize(width, height int) {
@@ -711,14 +731,26 @@ func (m LogViewerModel) View() string {
 	return b.String()
 }
 
-func runCleaner(ctx context.Context, options cleaner.Options) tea.Cmd {
+func runCleaner(ctx context.Context, run CleanerRunFunc, options cleaner.Options) tea.Cmd {
 	return func() tea.Msg {
-		report, err := cleaner.Run(ctx, options)
+		report, err := run(ctx, options)
 		return cleanerFinishedMsg{
-			report: report,
-			err:    err,
+			report:   report,
+			err:      err,
+			canceled: runWasCanceled(ctx, err),
 		}
 	}
+}
+
+func runWasCanceled(ctx context.Context, err error) bool {
+	return err != nil && errors.Is(ctx.Err(), context.Canceled)
+}
+
+func cancelingNotice(subject string, quitAfter bool) string {
+	if quitAfter {
+		return "Canceling " + subject + "; UTILS quits when it stops. Press ctrl+c again to quit now and leave the current step unfinished."
+	}
+	return "Canceling " + subject + "..."
 }
 
 func renderActivity(report cleaner.Report, width int) string {

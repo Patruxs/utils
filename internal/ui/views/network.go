@@ -68,7 +68,7 @@ type networkKeyMap struct {
 	Choose     key.Binding
 	Toggle     key.Binding
 	NextField  key.Binding
-	CancelRun  key.Binding
+	LeaveForm  key.Binding
 	BackToMenu key.Binding
 }
 
@@ -85,6 +85,7 @@ type NetworkModel struct {
 	manager          corenetwork.NetworkManager
 	report           *corenetwork.Report
 	err              error
+	canceled         bool
 	cancelNetwork    context.CancelFunc
 	notice           string
 	layout           common.Layout
@@ -106,8 +107,9 @@ type NetworkLogViewerModel struct {
 }
 
 type networkFinishedMsg struct {
-	report corenetwork.Report
-	err    error
+	report   corenetwork.Report
+	err      error
+	canceled bool
 }
 
 type networkActionItem struct {
@@ -192,9 +194,9 @@ func newNetworkKeyMap() networkKeyMap {
 			key.WithKeys("tab"),
 			key.WithHelp("tab:", "next field"),
 		),
-		CancelRun: key.NewBinding(
-			key.WithKeys("c"),
-			key.WithHelp("c:", "cancel"),
+		LeaveForm: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc:", "back"),
 		),
 		BackToMenu: key.NewBinding(
 			key.WithKeys("q", "esc"),
@@ -213,9 +215,9 @@ func (k networkKeyMap) contextual(state networkViewState) networkContextualKeyMa
 func (k networkContextualKeyMap) ShortHelp() []key.Binding {
 	switch k.state {
 	case networkStateRunning:
-		return []key.Binding{k.CancelRun}
+		return []key.Binding{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit}
 	case networkStateEditingHostsAdd:
-		return []key.Binding{k.NextField, k.Select, k.BackToMenu}
+		return []key.Binding{k.NextField, k.Select, k.LeaveForm}
 	case networkStateConfirmingWrite:
 		return []key.Binding{k.Move, k.Choose, common.DefaultKeys.Yes, common.DefaultKeys.No}
 	default:
@@ -226,9 +228,9 @@ func (k networkContextualKeyMap) ShortHelp() []key.Binding {
 func (k networkContextualKeyMap) FullHelp() [][]key.Binding {
 	switch k.state {
 	case networkStateRunning:
-		return [][]key.Binding{{k.CancelRun}}
+		return [][]key.Binding{{common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit}}
 	case networkStateEditingHostsAdd:
-		return [][]key.Binding{{k.NextField, k.Select, k.BackToMenu}}
+		return [][]key.Binding{{k.NextField, k.Select, k.LeaveForm}}
 	case networkStateConfirmingWrite:
 		return [][]key.Binding{{k.Move, k.Choose, common.DefaultKeys.Yes, common.DefaultKeys.No}}
 	default:
@@ -237,6 +239,10 @@ func (k networkContextualKeyMap) FullHelp() [][]key.Binding {
 }
 
 func NewNetworkModel() NetworkModel {
+	return NewNetworkModelWithManager(corenetwork.NewNetworkManager(nil))
+}
+
+func NewNetworkModelWithManager(manager corenetwork.NetworkManager) NetworkModel {
 	domainInput := textinput.New()
 	domainInput.Placeholder = "example.local"
 	domainInput.Prompt = "domain: "
@@ -261,7 +267,7 @@ func NewNetworkModel() NetworkModel {
 		help:            common.NewHelpModel(),
 		keyMap:          newNetworkKeyMap(),
 		logViewer:       NewNetworkLogViewerModel(),
-		manager:         corenetwork.NewNetworkManager(nil),
+		manager:         manager,
 		layout:          common.NewLayout(0, 0),
 		checkedActions:  make(map[networkActionID]bool),
 		hostDomainInput: domainInput,
@@ -317,6 +323,7 @@ func (m NetworkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = networkStateFinished
 		m.report = &msg.report
 		m.err = msg.err
+		m.canceled = msg.canceled
 		m.notice = ""
 		m.logViewer.SetMouseFocused(false)
 		m.logViewer.SetReport(msg.report)
@@ -325,8 +332,8 @@ func (m NetworkModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch m.state {
 		case networkStateRunning:
-			if key.Matches(msg, m.keyMap.CancelRun) {
-				return m.cancelRunningNetwork()
+			if key.Matches(msg, common.DefaultKeys.CancelRun, common.DefaultKeys.CancelAndQuit) {
+				return m.cancelRunningNetwork(common.IsForceQuit(msg))
 			}
 			return m, batch(cmds...)
 		case networkStateEditingHostsAdd:
@@ -445,7 +452,11 @@ func (m NetworkModel) View() string {
 		b.WriteString(m.logViewer.View())
 	}
 
-	if m.err != nil {
+	if m.canceled {
+		b.WriteString("\n")
+		b.WriteString(layout.RenderWrapped(runCanceledText, common.Warning.Render))
+		b.WriteString("\n")
+	} else if m.err != nil {
 		b.WriteString("\n")
 		b.WriteString(layout.RenderWrapped("Completed with errors: "+m.err.Error(), common.Error.Render))
 		b.WriteString("\n")
@@ -640,6 +651,10 @@ func dnsPresetChange(preset corenetwork.ConfigOptions) string {
 
 func (m NetworkModel) updateHostsAddForm(msg tea.KeyMsg, cmds ...tea.Cmd) (tea.Model, tea.Cmd) {
 	switch {
+	case key.Matches(msg, m.keyMap.LeaveForm):
+		m.state = networkStateSelectingOptions
+		m.notice = ""
+		return m, nil
 	case key.Matches(msg, m.keyMap.NextField):
 		m.focusHostField((m.focusedHostField + 1) % 2)
 		return m, nil
@@ -698,6 +713,7 @@ func (m NetworkModel) startRun(options networkRunOptions) (tea.Model, tea.Cmd) {
 	m.state = networkStateRunning
 	m.report = nil
 	m.err = nil
+	m.canceled = false
 	m.notice = ""
 
 	actions := options.actions
@@ -720,13 +736,21 @@ func (m NetworkModel) startRun(options networkRunOptions) (tea.Model, tea.Cmd) {
 	return m, batch(m.spinner.Tick, runNetwork(ctx, m.manager, options))
 }
 
-func (m NetworkModel) cancelRunningNetwork() (tea.Model, tea.Cmd) {
+func (m NetworkModel) cancelRunningNetwork(quitAfter bool) (tea.Model, tea.Cmd) {
 	if m.cancelNetwork != nil {
 		m.cancelNetwork()
 		m.cancelNetwork = nil
 	}
-	m.notice = "Canceling network operation..."
+	m.notice = cancelingNotice("network operation", quitAfter)
 	return m, nil
+}
+
+func (m NetworkModel) Running() bool {
+	return m.state == networkStateRunning
+}
+
+func (m NetworkModel) OwnsKeys() bool {
+	return m.Running() || m.state == networkStateEditingHostsAdd
 }
 
 func (m NetworkModel) renderActions() string {
@@ -918,8 +942,9 @@ func runNetwork(ctx context.Context, manager corenetwork.NetworkManager, options
 		report, err := runNetworkActions(ctx, manager, options)
 
 		return networkFinishedMsg{
-			report: report,
-			err:    err,
+			report:   report,
+			err:      err,
+			canceled: runWasCanceled(ctx, err),
 		}
 	}
 }

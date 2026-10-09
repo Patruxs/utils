@@ -34,6 +34,14 @@ func (i menuItem) FilterValue() string {
 	return strings.Join([]string{i.Title(), i.Description()}, " ")
 }
 
+type runningModel interface {
+	Running() bool
+}
+
+type keyOwningModel interface {
+	OwnsKeys() bool
+}
+
 type Router struct {
 	menu          list.Model
 	activeFeature AppFeature
@@ -42,6 +50,7 @@ type Router struct {
 	width         int
 	height        int
 	err           error
+	quitAfterRun  bool
 }
 
 var _ tea.Model = Router{}
@@ -93,6 +102,22 @@ func (m Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, nil
 	case tea.KeyMsg:
+		if m.activeModel == nil && m.menu.SettingFilter() && !common.IsForceQuit(msg) {
+			var cmd tea.Cmd
+			m.menu, cmd = m.menu.Update(msg)
+			return m, cmd
+		}
+		if m.activeModel != nil && common.IsForceQuit(msg) {
+			if m.quitAfterRun || !isRunning(m.activeModel) {
+				return m, tea.Quit
+			}
+			m.quitAfterRun = true
+			return m.updateActive(msg)
+		}
+		if m.activeModel != nil && ownsKeys(m.activeModel) {
+			return m.updateActive(msg)
+		}
+
 		switch {
 		case key.Matches(msg, common.DefaultKeys.Quit):
 			if common.IsForceQuit(msg) || m.activeFeature == nil {
@@ -115,14 +140,31 @@ func (m Router) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.activeFeature != nil && m.activeModel != nil {
-		next, cmd := m.activeModel.Update(msg)
-		m.activeModel = next
-		return m, cmd
+		return m.updateActive(msg)
 	}
 
 	var cmd tea.Cmd
 	m.menu, cmd = m.menu.Update(msg)
 	return m, cmd
+}
+
+func (m Router) updateActive(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.activeModel.Update(msg)
+	m.activeModel = next
+	if m.quitAfterRun && !isRunning(next) {
+		return m, tea.Batch(cmd, tea.Quit)
+	}
+	return m, cmd
+}
+
+func isRunning(model tea.Model) bool {
+	running, ok := model.(runningModel)
+	return ok && running.Running()
+}
+
+func ownsKeys(model tea.Model) bool {
+	owner, ok := model.(keyOwningModel)
+	return ok && owner.OwnsKeys()
 }
 
 func (m Router) View() string {

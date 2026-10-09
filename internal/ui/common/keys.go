@@ -14,6 +14,9 @@ type GlobalKeyMap struct {
 	Yes   key.Binding
 	No    key.Binding
 	Back  key.Binding
+
+	CancelRun     key.Binding
+	CancelAndQuit key.Binding
 }
 
 var DefaultKeys = GlobalKeyMap{
@@ -48,6 +51,14 @@ var DefaultKeys = GlobalKeyMap{
 	Back: key.NewBinding(
 		key.WithKeys("esc", "backspace"),
 		key.WithHelp("esc", "back"),
+	),
+	CancelRun: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "cancel run"),
+	),
+	CancelAndQuit: key.NewBinding(
+		key.WithKeys("ctrl+c"),
+		key.WithHelp("ctrl+c", "cancel and quit"),
 	),
 }
 
