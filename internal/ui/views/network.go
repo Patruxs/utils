@@ -151,6 +151,7 @@ const (
 
 	networkWideMinWidth       = 100
 	networkDialogMaxWidth     = 100
+	networkSectionGlyph       = "◆"
 	networkNarrowCrumbWidth   = 60
 	networkListMinRows        = 3
 	networkDetailMaxRows      = 4
@@ -1062,6 +1063,7 @@ func networkLogSections(results []networkActionResult) []common.LogSection {
 		section := common.LogSection{
 			ID:    fmt.Sprintf("action-%d", index),
 			Title: actionTitle(result.action),
+			Glyph: networkSectionGlyph,
 			Tone:  common.ToneAccent,
 		}
 		if len(results) > 1 {
