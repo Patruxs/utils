@@ -60,8 +60,11 @@ func TestRunExecuteDeletesExistingTargetsUnderFakeHome(t *testing.T) {
 	codexSessions := filepath.Join(home, ".codex", "sessions", "history.jsonl")
 	shellHistory := filepath.Join(home, ".bash_history")
 	browserCache := filepath.Join(home, ".cache", "chromium", "data")
-	if runtime.GOOS == "windows" {
+	switch runtime.GOOS {
+	case "windows":
 		browserCache = filepath.Join(home, "AppData", "Local", "Google", "Chrome", "User Data", "Default", "Cache", "data")
+	case "darwin":
+		browserCache = filepath.Join(home, "Library", "Caches", "Google", "Chrome", "data")
 	}
 	for _, file := range []string{filepath.Join(target, "token"), codexAuth, codexSessions, shellHistory, browserCache} {
 		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
@@ -125,8 +128,9 @@ func TestRunExecuteRefusesTargetBehindLinkThatLeavesHome(t *testing.T) {
 	if _, err := os.Stat(outsideToken); err != nil {
 		t.Fatalf("expected file outside home to survive, stat err=%v", err)
 	}
-	if !hasEntry(report, cleaner.LevelSkip, outside) {
-		t.Fatalf("expected a SKIP entry naming %q, got %#v", outside, report.Entries)
+	realOutside := evalSymlinks(t, outside)
+	if !hasEntry(report, cleaner.LevelSkip, realOutside) {
+		t.Fatalf("expected a SKIP entry naming %q, got %#v", realOutside, report.Entries)
 	}
 	refused, ok := entryForPath(report, filepath.Join(home, ".config", "gh", "hosts.yml"))
 	if !ok || refused.Level != cleaner.LevelSkip || refused.NotPresent {
@@ -207,12 +211,13 @@ func TestRunExecuteRemovesSymlinkAndReportsTargetKept(t *testing.T) {
 	if _, err := os.Stat(dotfile); err != nil {
 		t.Fatalf("expected symlink target to be kept, stat err=%v", err)
 	}
-	if !hasEntry(report, cleaner.LevelDelete, "symlink") || !hasEntry(report, cleaner.LevelDelete, dotfile) {
+	kept := evalSymlinks(t, dotfile)
+	if !hasEntry(report, cleaner.LevelDelete, "symlink") || !hasEntry(report, cleaner.LevelDelete, kept) {
 		t.Fatalf("expected a delete entry naming the symlink and its kept target, got %#v", report.Entries)
 	}
 	removed, ok := entryForPath(report, filepath.Join(linkedHome, ".npmrc"))
-	if !ok || removed.Level != cleaner.LevelDelete || removed.LinkTarget != dotfile {
-		t.Fatalf("expected the symlink delete entry to carry its kept target %q, got %#v", dotfile, removed)
+	if !ok || removed.Level != cleaner.LevelDelete || removed.LinkTarget != kept {
+		t.Fatalf("expected the symlink delete entry to carry its kept target %q, got %#v", kept, removed)
 	}
 }
 
@@ -396,6 +401,16 @@ func fakeHome(t *testing.T) string {
 	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 
 	return home
+}
+
+func evalSymlinks(t *testing.T, path string) string {
+	t.Helper()
+
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
 }
 
 type jitterFileSystem struct{}
