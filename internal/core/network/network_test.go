@@ -160,9 +160,11 @@ func assertFileContent(t *testing.T, path, want string) {
 
 func TestPreviewShowsTheCommandsTheActionRuns(t *testing.T) {
 	saved := "PersistentMode=True\nDNSPrimary=9.9.9.9\nDNSSecondary=149.112.112.112\nDNSName=Quad9\n"
+	discoveredSaved := "persistent=" + strings.ReplaceAll(strings.TrimSpace(saved), "\n", "\npersistent=")
+	readAtRunTime := strings.NewReplacer(placeholderSavedPrimary, "9.9.9.9", placeholderSavedBackup, "149.112.112.112")
 	statuses := map[string]Status{
 		"nothing discovered": {},
-		"NetworkManager":     parseStatus(runtime.GOOS, "tools= nmcli resolvectl\nconnection=1a2b3c4d:802-11-wireless\nlink=2: wlan0: <UP> mtu 1500\nadapterindex=12 Wi-Fi\nservice=Wi-Fi\nport=Wi-Fi\ndoh=True\ndohserver=1.1.1.1\npersistent="+saved),
+		"NetworkManager":     parseStatus(runtime.GOOS, "tools= nmcli resolvectl\nconnection=1a2b3c4d:802-11-wireless\nlink=2: wlan0: <UP> mtu 1500\nadapterindex=12 Wi-Fi\nservice=Wi-Fi\nport=Wi-Fi\ndoh=True\ndohserver=1.1.1.1\n"+discoveredSaved),
 		"systemd-resolved":   parseStatus(runtime.GOOS, "tools= resolvectl\nlink=2: eth0: <UP> mtu 1500"),
 		"resolv.conf":        parseStatus(runtime.GOOS, "tools= nscd"),
 	}
@@ -184,7 +186,7 @@ func TestPreviewShowsTheCommandsTheActionRuns(t *testing.T) {
 					t.Fatalf("%s: expected a preview for action %d", name, action)
 				}
 				for _, step := range steps {
-					if !strings.Contains(executed, step.template) {
+					if !strings.Contains(executed, readAtRunTime.Replace(step.template)) {
 						t.Fatalf("%s: action %d previews %q, which is not in what it ran:\n%s", name, action, step.template, executed)
 					}
 				}

@@ -18,17 +18,21 @@ func TestPlanNeverChangesTheProfileWhateverTheOptions(t *testing.T) {
 	home := fakeHome(t)
 	outside := t.TempDir()
 	privateKey := "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk=\n-----END OPENSSH PRIVATE KEY-----\n"
+	chrome, edge := chromiumProfileRoots(home)
 	writeFiles(t, map[string]string{
-		filepath.Join(home, ".aws", "credentials"):                       "secret",
-		filepath.Join(home, ".oci", "sessions", "x"):                     "secret",
-		filepath.Join(home, ".ssh", "id_ed25519"):                        privateKey,
-		filepath.Join(home, ".ssh", "known_hosts"):                       "host",
-		filepath.Join(home, ".bash_history"):                             "export TOKEN=x",
-		filepath.Join(home, ".config", "google-chrome", "Default", "c"):  "cookie",
-		filepath.Join(home, ".codex", "sessions", "history.jsonl"):       "history",
-		filepath.Join(outside, "gh", "hosts.yml"):                        "secret",
-		filepath.Join(home, ".config", "chromium", "Profile 1", "Login"): "password",
+		filepath.Join(home, ".aws", "credentials"):                 "secret",
+		filepath.Join(home, ".oci", "sessions", "x"):               "secret",
+		filepath.Join(home, ".ssh", "id_ed25519"):                  privateKey,
+		filepath.Join(home, ".ssh", "known_hosts"):                 "host",
+		filepath.Join(home, ".bash_history"):                       "export TOKEN=x",
+		filepath.Join(chrome, "Default", "c"):                      "cookie",
+		filepath.Join(home, ".codex", "sessions", "history.jsonl"): "history",
+		filepath.Join(outside, "gh", "hosts.yml"):                  "secret",
+		filepath.Join(edge, "Profile 1", "Login"):                  "password",
 	})
+	if err := os.MkdirAll(filepath.Join(home, ".config"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Symlink(filepath.Join(outside, "gh"), filepath.Join(home, ".config", "gh")); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
@@ -82,7 +86,7 @@ func TestPlanNeverChangesTheProfileWhateverTheOptions(t *testing.T) {
 		t.Fatalf("expected ~/.oci listed as a folder, got %#v", credentials.Entries)
 	}
 	refused, ok := planEntry(credentials, filepath.Join(home, ".config", "gh", "hosts.yml"))
-	if !ok || refused.Refused != cleaner.RefusedOutsideProfile || !strings.HasPrefix(refused.LinkTarget, outside) {
+	if !ok || refused.Refused != cleaner.RefusedOutsideProfile || !strings.HasPrefix(refused.LinkTarget, evalSymlinks(t, outside)) {
 		t.Fatalf("expected the link that leaves the profile listed as refused with where it leads, got %#v", credentials.Entries)
 	}
 	if _, ok := planEntry(credentials, filepath.Join(home, ".npmrc")); ok {
@@ -165,6 +169,18 @@ func writeFiles(t *testing.T, files map[string]string) {
 	}
 }
 
+func chromiumProfileRoots(home string) (string, string) {
+	switch runtime.GOOS {
+	case "windows":
+		local := filepath.Join(home, "AppData", "Local")
+		return filepath.Join(local, "Google", "Chrome", "User Data"), filepath.Join(local, "Microsoft", "Edge", "User Data")
+	case "darwin":
+		support := filepath.Join(home, "Library", "Application Support")
+		return filepath.Join(support, "Google", "Chrome"), filepath.Join(support, "Microsoft Edge")
+	}
+	return filepath.Join(home, ".config", "google-chrome"), filepath.Join(home, ".config", "microsoft-edge")
+}
+
 func snapshotTree(t *testing.T, roots ...string) []string {
 	t.Helper()
 	var snapshot []string
@@ -173,12 +189,22 @@ func snapshotTree(t *testing.T, roots ...string) []string {
 			if err != nil {
 				return err
 			}
-			info, err := entry.Info()
+			info, err := os.Lstat(path)
 			if err != nil {
 				return err
 			}
+			if info.IsDir() {
+				snapshot = append(snapshot, fmt.Sprintf("%s %v", path, info.Mode()))
+				return nil
+			}
+			var body []byte
+			if info.Mode().IsRegular() {
+				if body, err = os.ReadFile(path); err != nil {
+					return err
+				}
+			}
 			link, _ := os.Readlink(path)
-			snapshot = append(snapshot, fmt.Sprintf("%s %v %d %d %s", path, info.Mode(), info.Size(), info.ModTime().UnixNano(), link))
+			snapshot = append(snapshot, fmt.Sprintf("%s %v %d %d %s %q", path, info.Mode(), info.Size(), info.ModTime().UnixNano(), link, body))
 			return nil
 		})
 		if err != nil {

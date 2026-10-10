@@ -50,13 +50,21 @@ func TestDeveloperTargetsIncludeIDEAndCopilotData(t *testing.T) {
 }
 
 func TestBrowserTargetsMatchTheOperatingSystem(t *testing.T) {
-	if runtime.GOOS == osWindows {
-		t.Skip("Windows browser paths come from APPDATA and LOCALAPPDATA")
-	}
 	home := t.TempDir()
-	fs := envOnlyFS{}
+	localAppData := filepath.Join(home, "AppData", "Local")
+	fs := envOnlyFS{
+		envAPPDATA:      filepath.Join(home, "AppData", "Roaming"),
+		envLOCALAPPDATA: localAppData,
+	}
 	profiles := browserProfileTargets(home, fs)
 	caches := browserCacheTargets(home, fs)
+
+	if runtime.GOOS == osWindows {
+		assertTarget(t, profiles, filepath.Join(localAppData, "Microsoft", "Edge", "User Data"), targetLabelBrowserProfileRoot)
+		assertTarget(t, caches, filepath.Join(localAppData, "Microsoft", "Edge", "User Data", "Default", "Cache"), targetLabelBrowserCache)
+		assertNoTargetUnder(t, append(profiles, caches...), filepath.Join(home, ".var"), filepath.Join(home, ".config"), filepath.Join(home, ".mozilla"), filepath.Join(home, "Library"))
+		return
+	}
 
 	if runtime.GOOS == "darwin" {
 		assertTarget(t, profiles, filepath.Join(home, "Library", "Application Support", "Microsoft Edge"), targetLabelBrowserProfileRoot)
